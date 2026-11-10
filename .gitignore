@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+build/
+dist/
+venv/
+.venv/
+*.mcpt
+*.mcpt.tmp
+sauvegardes/
+.pytest_cache/
