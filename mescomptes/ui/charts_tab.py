@@ -1,13 +1,13 @@
 """Pages « Détail par catégorie » et « Graphiques »."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QTreeWidget
+from PySide6.QtWidgets import QBoxLayout, QComboBox, QGridLayout, QHBoxLayout, QTreeWidget
 
 from .. import analytics as an
 from ..exporters import DATE, MONEY, PCT, TEXT, TableData, export_pdf
 from ..money import fmt_eur, fmt_pct, pct_change
 from . import theme as T
-from .common import (CHART_COLORS, SORT_ROLE, Card, CategoryCombo, ChartCanvas, Page, PeriodSelector, SortItem,
+from .common import (FlowLayout, CHART_COLORS, SORT_ROLE, Card, CategoryCombo, ChartCanvas, Page, PeriodSelector, SortItem,
                      button, error, euro_axis, info, label, safe_filename, save_path, set_money, style_tree)
 from .dashboard import KpiCard
 from .operations_tab import OperationsPanel
@@ -37,7 +37,7 @@ class DetailTab(Page):
                                                  "principaux fournisseurs d'une catégorie.", parent, scroll=True)
         self.db = db
         self.add_action(button("PDF", "file", slot=self.export_pdf, tooltip="Exporter en PDF"))
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         bar.setSpacing(8)
         self.cat = CategoryCombo(self, with_none=True)
         bar.addWidget(self.cat)
@@ -56,7 +56,7 @@ class DetailTab(Page):
             kpis.addWidget(k, 0, i)
         self.add(kpis)
 
-        row = QHBoxLayout()
+        row = QBoxLayout(QBoxLayout.LeftToRight)
         row.setSpacing(14)
         chart_card = Card()
         self.chart_title = label("", "sectionTitle")
@@ -74,6 +74,7 @@ class DetailTab(Page):
         vcard.add(self.vendors, 1)
         row.addWidget(vcard, 2)
         self.add(row, 3)
+        self.row, self.chart_card = row, chart_card
 
         ops_card = Card()
         ops_card.add(label("Opérations", "sectionTitle"))
@@ -100,6 +101,11 @@ class DetailTab(Page):
         dlg.exec()
         if dlg.dirty:
             self._ops_changed()
+
+    def on_resize(self, width):
+        stacked = width < 1000
+        self.row.setDirection(QBoxLayout.TopToBottom if stacked else QBoxLayout.LeftToRight)
+        self.chart_card.setMinimumHeight(280 if stacked else 0)
 
     def show_category(self, cat_id):
         self.cat.set_value(cat_id)
@@ -161,7 +167,7 @@ class DetailTab(Page):
             ax.plot(x, [prev[an.add_months(m, -12)] / 100 if an.add_months(m, -12) in prev else float("nan")
                         for m in months], color=T.TEXT, marker="o", markersize=3.5, linestyle="--",
                     linewidth=1.2, label="Année précédente")
-            ax.legend(loc="upper left", fontsize=8)
+            ax.legend(loc="lower left", bbox_to_anchor=(0, 1.01), borderaxespad=0, handlelength=1.2, columnspacing=1.2, ncol=2, fontsize=8)
         ax.set_xticks(x, [an.month_label(m) for m in months], rotation=45 if len(months) > 6 else 0,
                       ha="right" if len(months) > 6 else "center", fontsize=8)
         euro_axis(ax)
@@ -218,7 +224,7 @@ class ChartsTab(Page):
         self.db = db
         self.add_action(button("Image", "download", slot=self.export_png, tooltip="Exporter en image PNG"))
         self.add_action(button("PDF", "file", slot=self.export_pdf, tooltip="Exporter en PDF"))
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         bar.setSpacing(8)
         self.kind = QComboBox()
         self.kind.addItems(self.CHARTS)
@@ -297,9 +303,9 @@ class ChartsTab(Page):
                     label="Revenus − dépenses")
             ax.axhline(0, color=T.BORDER_STRONG, linewidth=0.8)
             top = max([r / 100 for _, r, _ in data] + [d / 100 for _, _, d in data] + [1])
-            ax.set_ylim(top=top * 1.2)
+            ax.set_ylim(top=top * 1.05)
             ax.set_xticks(x, labels, fontsize=8, **rot)
-            ax.legend(fontsize=9, loc="upper left", ncol=3)
+            ax.legend(loc="lower left", bbox_to_anchor=(0, 1.01), borderaxespad=0, handlelength=1.2, columnspacing=1.2, ncol=3, fontsize=8.5)
             euro_axis(ax)
         elif k == 1:
             rep = an.pivot(self.db, start, end)
@@ -363,7 +369,8 @@ class ChartsTab(Page):
                 ax.text(0.5, 0.5, "Le relevé importé ne contient pas de colonne « Solde ».", ha="center",
                         transform=ax.transAxes, color=T.MUTED)
                 ax.axis("off")
-        ax.set_title(f"{self.CHARTS[k]} — {self.period.label()}")
+        fig.suptitle(f"{self.CHARTS[k]} — {self.period.label()}", x=0.01, ha="left", fontsize=10,
+                     fontweight="bold", color=T.TEXT)
         self.canvas.draw_idle()
 
     def export_png(self):

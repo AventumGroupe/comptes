@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox, QFo
 
 from ..db import KINDS
 from . import theme as T
-from .common import (COLOR_ROLE, GREY, SORT_ROLE, Card, CategoryCombo, DotDelegate, Page, SortItem, bold_font,
+from .common import (FlowLayout, COLOR_ROLE, GREY, SORT_ROLE, Card, CategoryCombo, DotDelegate, Page, SortItem, bold_font,
                      button, confirm, error, info, label, search_box, style_tree)
 from .dialogs import CategoryEditDialog, RuleEditDialog
 
@@ -119,9 +119,10 @@ class CategoriesTab(Page):
         self.db = db
         self.add_action(button("Supprimer les catégories vides", "trash", slot=self.cleanup))
         self.add_action(button("Nouvelle catégorie", "plus", "primary", slot=self.add_top))
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         bar.setSpacing(8)
         self.search = search_box("Rechercher une catégorie…")
+        self.search.setMinimumWidth(280)
         self.search.textChanged.connect(self._filter)
         bar.addWidget(self.search, 1)
         for text, ic, cb in (("Sous-catégorie", "plus", self.add_sub), ("Renommer", "edit", self.rename),
@@ -284,9 +285,10 @@ class RulesTab(Page):
         self.db = db
         self.add_action(button("Réappliquer toutes les règles", "wand", slot=self.reapply))
         self.add_action(button("Nouvelle règle", "plus", "primary", slot=self.new_rule))
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         bar.setSpacing(8)
         self.search = search_box("Filtrer les règles…")
+        self.search.setMinimumWidth(320)
         self.search.textChanged.connect(self.refresh)
         bar.addWidget(self.search, 1)
         bar.addWidget(button("Modifier", "edit", slot=self.edit))

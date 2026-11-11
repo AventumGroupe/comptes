@@ -8,10 +8,11 @@ import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QRectF, QSize, QSortFilterProxyModel, Qt,  # noqa: E402
-                            Signal)
+from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QPoint, QRect, QRectF, QSize,  # noqa: E402
+                            QSortFilterProxyModel, Qt, Signal)
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen  # noqa: E402
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QHBoxLayout,  # noqa: E402
+from PySide6.QtWidgets import (QAbstractItemView, QBoxLayout, QComboBox, QFileDialog, QFrame, QHBoxLayout,  # noqa: E402
+                               QLayout,
                                QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QStyle,
                                QStyledItemDelegate, QTableView, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
@@ -119,8 +120,96 @@ class Card(QFrame):
         return w
 
 
+class FlowLayout(QLayout):
+    """Disposition « en ligne » qui passe à la ligne quand la place manque (barres de filtres)."""
+
+    def __init__(self, parent=None, spacing=8):
+        super().__init__(parent)
+        self._items = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def addWidget(self, w, stretch=0, alignment=None):  # noqa: ARG002 - même signature que QBoxLayout
+        super().addWidget(w)
+
+    def setSpacing(self, spacing):
+        self._spacing = spacing
+
+    def spacing(self):
+        return self._spacing
+
+    def addSpacing(self, _w):
+        pass  # sans objet dans une disposition fluide
+
+    def addStretch(self, *_):
+        pass
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _layout(self, rect, test):
+        x, y, line_h = rect.x(), rect.y(), 0
+        for it in self._items:
+            if it.widget() is not None and it.widget().isHidden():
+                continue
+            hint = it.sizeHint()
+            if x + hint.width() > rect.right() + 1 and line_h > 0:
+                x = rect.x()
+                y += line_h + self._spacing
+                line_h = 0
+            if not test:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._spacing
+            line_h = max(line_h, hint.height())
+        return y + line_h - rect.y()
+
+
+def flow_row(*widgets, spacing=8):
+    """Conteneur dont les éléments passent à la ligne si nécessaire."""
+    w = QWidget()
+    lay = FlowLayout(w, spacing)
+    for x in widgets:
+        lay.addWidget(x)
+    return w
+
+
 class Page(QWidget):
-    """Page de l'application : en-tête (titre, sous-titre, actions) puis contenu."""
+    """Page de l'application : en-tête (titre, sous-titre, actions) puis contenu.
+    L'en-tête et les marges s'adaptent à la largeur disponible."""
+
+    NARROW = 980
 
     def __init__(self, title, subtitle="", parent=None, scroll=False):
         super().__init__(parent)
@@ -129,7 +218,9 @@ class Page(QWidget):
         self.root = QVBoxLayout(self)
         self.root.setContentsMargins(28, 22, 28, 20)
         self.root.setSpacing(14)
-        head = QHBoxLayout()
+        head = QBoxLayout(QBoxLayout.LeftToRight)
+        head.setSpacing(10)
+        self._head = head
         titles = QVBoxLayout()
         titles.setSpacing(2)
         self.title_label = label(title, "title")
@@ -138,11 +229,15 @@ class Page(QWidget):
         if subtitle:
             titles.addWidget(self.subtitle_label)
         head.addLayout(titles, 1)
-        self.actions = QHBoxLayout()
+        actions_w = QWidget()
+        self.actions = QHBoxLayout(actions_w)
+        self.actions.setContentsMargins(0, 0, 0, 0)
         self.actions.setSpacing(8)
-        head.addLayout(self.actions)
-        self.root.addLayout(head)
+        head.addWidget(actions_w, 0, Qt.AlignLeft | Qt.AlignVCenter)
         self.body = self.root
+        self._scroll = scroll
+        if not scroll:
+            self.root.addLayout(head)
         if scroll:
             from PySide6.QtWidgets import QScrollArea
             area = QScrollArea()
@@ -155,8 +250,10 @@ class Page(QWidget):
             self.body = QVBoxLayout(inner)
             self.body.setContentsMargins(0, 0, 6, 0)
             self.body.setSpacing(14)
+            self.body.addLayout(head)  # l'en-tête défile avec le contenu
             area.setWidget(inner)
             self.root.addWidget(area, 1)
+        self._narrow = None
 
     def add_action(self, w):
         self.actions.addWidget(w)
@@ -171,6 +268,20 @@ class Page(QWidget):
 
     def refresh(self):
         pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        w = event.size().width()
+        narrow = w < self.NARROW
+        if narrow != self._narrow:
+            self._narrow = narrow
+            self._head.setDirection(QBoxLayout.TopToBottom if narrow else QBoxLayout.LeftToRight)
+            m = 16 if narrow else 28
+            self.root.setContentsMargins(m, 16 if narrow else 22, m, 14 if narrow else 20)
+        self.on_resize(w)
+
+    def on_resize(self, width):
+        """À surcharger pour réorganiser une page selon la largeur."""
 
 
 def hline():
@@ -400,7 +511,7 @@ class MonthCombo(QComboBox):
         self.blockSignals(True)
         self.clear()
         for m in months:
-            self.addItem(an.month_label(m, full=True).capitalize(), m)
+            self.addItem(an.month_label(m).capitalize(), m)
         if keep and current:
             self.set_month(current)
         self.blockSignals(False)

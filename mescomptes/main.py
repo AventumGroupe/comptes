@@ -24,7 +24,7 @@ def main():
     if login.exec() != QDialog.Accepted or login.db is None:
         return 0
     win = MainWindow(login.db, settings)
-    win.show()
+    win.showMaximized()
     code = app.exec()
     # Les données sont déjà enregistrées (fermeture de la fenêtre). Sortie directe pour éviter
     # un éventuel plantage de Qt pendant la destruction des objets à la fermeture de Python.

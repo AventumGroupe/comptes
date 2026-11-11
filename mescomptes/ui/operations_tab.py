@@ -9,7 +9,7 @@ from ..exporters import DATE, MONEY, TEXT, TableData, export_excel
 from ..money import fmt_eur
 from . import theme as T
 from .classify import ClassifyDialog, ClassifyPanel
-from .common import (Card, CategoryCombo, OperationsView, Page, PeriodSelector, button, confirm, info, label,
+from .common import (FlowLayout, Card, CategoryCombo, OperationsView, Page, PeriodSelector, button, confirm, info, label,
                      save_path, search_box)
 
 
@@ -111,7 +111,7 @@ class OperationsTab(Page):
         self.add_action(button("Importer un relevé", "upload", "primary", slot=lambda: self.import_requested.emit()))
 
         # pastilles de statut
-        chips = QHBoxLayout()
+        chips = FlowLayout()
         chips.setSpacing(8)
         self.chips = []
         for text, status in self.STATUS_CHIPS:
@@ -180,6 +180,13 @@ class OperationsTab(Page):
         self.search.textChanged.connect(self.reload)
 
     # ------------------------------------------------------------------
+    def on_resize(self, width):
+        narrow = width < 1150
+        m = self.view.model_
+        self.view.setColumnHidden(m.COL_STATUS, narrow)   # le statut reste visible dans le volet
+        self.view.setColumnWidth(m.COL_CAT, 170 if narrow else 210)
+        self.view.setColumnWidth(m.COL_DATE, 86 if narrow else 96)
+
     def refresh(self):
         self.cat_filter.populate(self.db)
         self.panel.refresh_categories()

@@ -10,7 +10,7 @@ from ..db import KIND_ORDER
 from ..exporters import MONEY, PCT, TEXT, TableData, report_to_rows
 from ..money import fmt_eur, fmt_pct, parse_eur_input
 from . import theme as T
-from .common import (COLOR_ROLE, GREEN, GREY, RED, SECTION_BG, SORT_ROLE, TEXT as TEXT_COLOR, TOTAL_BG, Card,
+from .common import (FlowLayout, COLOR_ROLE, GREEN, GREY, RED, SECTION_BG, SORT_ROLE, TEXT as TEXT_COLOR, TOTAL_BG, Card,
                      ChartCanvas, DotDelegate, MonthCombo, Page, PeriodSelector, SortItem, bold_font, button,
                      confirm, error, euro_axis, info, label, style_row, style_tree)
 from .report_tabs import NODE_ROLE, OperationsDialog, ReportTree, do_export, export_buttons
@@ -47,7 +47,7 @@ class ForecastPage(Page):
         self.db = db
         export_buttons(self, lambda: self.export("excel"), lambda: self.export("pdf"))
 
-        row = QHBoxLayout()
+        row = FlowLayout()
         row.setSpacing(8)
         row.addWidget(label("À partir de", "muted"))
         self.start = MonthCombo()
@@ -68,7 +68,7 @@ class ForecastPage(Page):
         row.addStretch()
         self.add(row)
 
-        row2 = QHBoxLayout()
+        row2 = FlowLayout()
         row2.setSpacing(8)
         row2.addWidget(button("Recopier la 1ʳᵉ colonne sur tous les mois", "compare", slot=self.copy_first_column,
                               tooltip="Chaque montant du premier mois est reporté sur les mois suivants"))
@@ -339,7 +339,7 @@ class PlanActualPage(Page):
                          parent)
         self.db = db
         export_buttons(self, lambda: self.export("excel"), lambda: self.export("pdf"))
-        row = QHBoxLayout()
+        row = FlowLayout()
         row.setSpacing(8)
         self.period = PeriodSelector(self, default="Année en cours")
         row.addWidget(self.period)
@@ -463,9 +463,9 @@ class PlanActualPage(Page):
             ax.plot([i + w / 2 for i in x], [dep.plan.get(m, 0) / 100 for m in months], color=T.TEXT,
                     linestyle="--", marker="_", markersize=14, linewidth=1.2, label="Dépenses prévues")
         ax.set_xticks(x, [an.month_label(m).split()[0].capitalize() for m in months], fontsize=8)
-        ax.legend(loc="upper left", ncol=4, fontsize=7.5)
+        ax.legend(loc="lower left", bbox_to_anchor=(0, 1.01), borderaxespad=0, handlelength=1.2, columnspacing=1.2, ncol=4, fontsize=7.5)
         top = max([v / 100 for t in (rev, dep) for v in list(t.values.values()) + list(t.plan.values())] + [1])
-        ax.set_ylim(top=top * 1.3)
+        ax.set_ylim(top=top * 1.05)
         euro_axis(ax)
         self.canvas.draw_idle()
 

@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QAbstractItemView, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QBoxLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .. import analytics as an
 from ..db import NONE
@@ -112,19 +112,22 @@ class DashboardPage(Page):
         bl.addWidget(button("Classer maintenant", None, "primary", slot=lambda: self.go_todo.emit()))
         self.add(self.banner)
 
-        grid = QGridLayout()
-        grid.setSpacing(14)
+        self.grid = QGridLayout()
+        self.grid.setSpacing(14)
         self.k_rev = KpiCard("Revenus")
         self.k_dep = KpiCard("Dépenses")
         self.k_net = KpiCard("Revenus − dépenses")
-        self.k_sav = KpiCard("Épargne et virements internes")
-        for i, k in enumerate((self.k_rev, self.k_dep, self.k_net, self.k_sav)):
-            grid.addWidget(k, 0, i)
-        self.add(grid)
+        self.k_sav = KpiCard("Épargne et virements")
+        self.kpis = (self.k_rev, self.k_dep, self.k_net, self.k_sav)
+        self._kpi_cols = None
+        self._place_kpis(4)
+        self.add(self.grid)
 
-        row = QHBoxLayout()
+        row = QBoxLayout(QBoxLayout.LeftToRight)
         row.setSpacing(14)
+        self.row = row
         chart_card = Card()
+        self.chart_card = chart_card
         chart_card.add(label("Évolution sur 12 mois", "sectionTitle"))
         self.canvas = ChartCanvas(chart_card, height=3.2)
         chart_card.add(self.canvas, 1)
@@ -144,6 +147,7 @@ class DashboardPage(Page):
         self.add(row, 3)
 
         last_card = Card(margins=(16, 12, 16, 8))
+        last_card.setMinimumHeight(230)
         lh = QHBoxLayout()
         lh.addWidget(label("Dernières opérations", "sectionTitle"))
         lh.addStretch()
@@ -157,6 +161,26 @@ class DashboardPage(Page):
         self.add(last_card, 2)
 
         self.period.changed.connect(self.reload)
+
+    # ------------------------------------------------------------ adaptatif
+    def _place_kpis(self, cols):
+        if cols == self._kpi_cols:
+            return
+        self._kpi_cols = cols
+        for k in self.kpis:
+            self.grid.removeWidget(k)
+        for i, k in enumerate(self.kpis):
+            self.grid.addWidget(k, i // cols, i % cols)
+        for c in range(4):
+            self.grid.setColumnStretch(c, 1 if c < cols else 0)
+
+    def on_resize(self, width):
+        # 4 cartes côte à côte seulement si elles tiennent sans être tronquées
+        need = 4 * max(k.minimumSizeHint().width() for k in self.kpis) + 3 * 14 + 70
+        self._place_kpis(4 if width >= need else 2)
+        stacked = width < 1050
+        self.row.setDirection(QBoxLayout.TopToBottom if stacked else QBoxLayout.LeftToRight)
+        self.chart_card.setMinimumHeight(300 if stacked else 0)
 
     def refresh(self):
         self.period.set_bounds(*self.db.date_bounds())
@@ -231,8 +255,9 @@ class DashboardPage(Page):
         ax.axhline(0, color=T.BORDER_STRONG, linewidth=0.8)
         ax.set_xticks(x, [an.month_label(m).split()[0].capitalize() for m, _, _ in data])
         top = max([r / 100 for _, r, _ in data] + [d / 100 for _, _, d in data] + [1])
-        ax.set_ylim(top=top * 1.22)
-        ax.legend(loc="upper left", ncol=4, fontsize=7.5)
+        ax.set_ylim(top=top * 1.05)
+        ax.legend(loc="lower left", bbox_to_anchor=(0, 1.01), ncol=4, fontsize=7.5, borderaxespad=0,
+                  handlelength=1.2, columnspacing=1.2)
         euro_axis(ax)
         self.canvas.draw_idle()
 

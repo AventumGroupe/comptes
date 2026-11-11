@@ -27,7 +27,7 @@ class ClassifyPanel(QFrame):
         self.ops = []
         self.current_rule = None
         self.setObjectName("drawer")
-        self.setMinimumWidth(350)
+        self.setMinimumWidth(320)
         self.setMaximumWidth(420)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 16)

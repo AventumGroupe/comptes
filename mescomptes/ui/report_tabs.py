@@ -8,7 +8,7 @@ from .. import analytics as an
 from ..exporters import MONEY, PCT, RATIO, TEXT, TableData, export_excel, export_pdf, report_to_rows
 from ..money import fmt_eur, fmt_pct, parse_eur_input, pct_change
 from . import theme as T
-from .common import (COLOR_ROLE, GREEN, GREY, ORANGE, RED, SECTION_BG, SORT_ROLE, TEXT as TEXT_COLOR, TOTAL_BG,
+from .common import (FlowLayout, COLOR_ROLE, GREEN, GREY, ORANGE, RED, SECTION_BG, SORT_ROLE, TEXT as TEXT_COLOR, TOTAL_BG,
                      Card, DotDelegate, Page, PeriodSelector, SortItem, bold_font, button, confirm, error, info,
                      label, safe_filename, save_path, set_money, style_row, style_tree)
 from .operations_tab import OperationsPanel
@@ -127,7 +127,7 @@ class SummaryTab(Page):
                                                "Double-cliquez sur un montant pour voir les opérations.", parent)
         self.db = db
         export_buttons(self, lambda: self.export("excel"), lambda: self.export("pdf"))
-        bar = QHBoxLayout()
+        bar = FlowLayout()
         bar.setSpacing(8)
         self.period = PeriodSelector(self, default="12 derniers mois")
         bar.addWidget(self.period)
@@ -254,7 +254,7 @@ class CompareTab(Page):
         r1.addWidget(self.pa)
         r1.addStretch()
         card.add(r1)
-        r2 = QHBoxLayout()
+        r2 = FlowLayout()
         r2.addWidget(self._tag("B"))
         r2.addWidget(label("Comparer avec", "muted"))
         self.mode = QComboBox()

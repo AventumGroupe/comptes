@@ -246,7 +246,13 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.name = os.path.splitext(os.path.basename(db.path))[0]
         self.setWindowTitle(f"{APP_NAME} — {self.name}")
-        self.resize(1440, 900)
+        self.setMinimumSize(960, 600)
+        screen = self.screen().availableGeometry() if self.screen() else None
+        if screen is not None:
+            # fenêtre adaptée à l'écran (et à l'agrandissement Windows), sans dépasser
+            self.resize(min(1440, screen.width() - 40), min(900, screen.height() - 60))
+        else:
+            self.resize(1440, 900)
 
         self.dashboard = DashboardPage(db)
         self.ops_tab = OperationsTab(db)
@@ -290,28 +296,40 @@ class MainWindow(QMainWindow):
         side = QFrame()
         side.setObjectName("sidebar")
         side.setFixedWidth(236)
+        self.side = side
         lay = QVBoxLayout(side)
         lay.setContentsMargins(14, 18, 14, 14)
         lay.setSpacing(2)
+        self.side_layout = lay
         brand = QHBoxLayout()
-        logo = QLabel()
-        logo.setPixmap(T.pixmap("chart", T.ACCENT, 24))
-        brand.addWidget(logo)
-        brand.addWidget(label(APP_NAME, "brand"))
+        self.logo = QLabel()
+        self.logo.setPixmap(T.pixmap("chart", T.ACCENT, 24))
+        brand.addWidget(self.logo)
+        self.brand = label(APP_NAME, "brand")
+        brand.addWidget(self.brand)
         brand.addStretch()
+        self.toggle_btn = QPushButton()
+        self.toggle_btn.setObjectName("ghost")
+        self.toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.toggle_btn.setFixedSize(28, 28)
+        self.toggle_btn.clicked.connect(self._toggle_sidebar)
+        brand.addWidget(self.toggle_btn, 0, Qt.AlignHCenter)
         lay.addLayout(brand)
         lay.addSpacing(14)
-        imp = button("Importer un relevé", "upload", "primary", slot=self.import_statement,
-                     tooltip="Ctrl+I")
-        imp.setMinimumHeight(34)
-        lay.addWidget(imp)
+        self.imp = button("Importer un relevé", "upload", "primary", slot=self.import_statement,
+                          tooltip="Importer un relevé (Ctrl+I)")
+        self.imp.setMinimumHeight(34)
+        lay.addWidget(self.imp)
         lay.addSpacing(8)
         self.nav_group = QButtonGroup(self)
         self.nav_buttons = []
+        self.nav_sections = []
         page_index = 0
         for ic, text in self.NAV:
             if ic is None:
-                lay.addWidget(label(text, "navSection"))
+                sec = label(text, "navSection")
+                self.nav_sections.append(sec)
+                lay.addWidget(sec)
                 continue
             b = QPushButton(text)
             b.setObjectName("nav")
@@ -319,6 +337,8 @@ class MainWindow(QMainWindow):
             b.setCursor(Qt.PointingHandCursor)
             b.setIcon(T.icon(ic, T.MUTED, active_color=T.ACCENT))
             b.setIconSize(QSize(18, 18))
+            b.setProperty("full_text", text)
+            b.setToolTip(text)
             if text == "Opérations":
                 bl = QHBoxLayout(b)
                 bl.setContentsMargins(0, 0, 8, 0)
@@ -337,16 +357,18 @@ class MainWindow(QMainWindow):
         foot.setStyleSheet(f"QFrame {{ background:{T.BG}; border-radius:10px; }}")
         fl = QHBoxLayout(foot)
         fl.setContentsMargins(10, 8, 6, 8)
-        ic = QLabel()
-        ic.setPixmap(T.pixmap("lock", T.MUTED, 16))
-        fl.addWidget(ic)
-        txt = QVBoxLayout()
+        self.foot_icon = QLabel()
+        self.foot_icon.setPixmap(T.pixmap("lock", T.MUTED, 16))
+        fl.addWidget(self.foot_icon)
+        self.foot_text = QWidget()
+        txt = QVBoxLayout(self.foot_text)
+        txt.setContentsMargins(0, 0, 0, 0)
         txt.setSpacing(0)
         txt.addWidget(label(self.name, None))
         sub = label("Dossier chiffré", "muted")
         sub.setStyleSheet("font-size:8.5pt")
         txt.addWidget(sub)
-        fl.addLayout(txt, 1)
+        fl.addWidget(self.foot_text, 1)
         more = QPushButton("⋯")
         more.setObjectName("ghost")
         more.setCursor(Qt.PointingHandCursor)
@@ -365,12 +387,50 @@ class MainWindow(QMainWindow):
         more.setStyleSheet("QPushButton::menu-indicator { image: none; width: 0; }")
         fl.addWidget(more)
         lay.addWidget(foot)
+        self._compact = None
+        self._compact_pref = self.settings.get("sidebar_compact")  # None = automatique
         return side
+
+    # --------------------------------------------------------- menu replié
+    COMPACT_BELOW = 1280
+
+    def set_compact(self, compact):
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self.side.setFixedWidth(68 if compact else 236)
+        self.side_layout.setContentsMargins(10 if compact else 14, 18, 10 if compact else 14, 14)
+        self.brand.setVisible(not compact)
+        self.logo.setVisible(not compact)
+        for sec in self.nav_sections:
+            sec.setVisible(not compact)
+        for b in self.nav_buttons:
+            b.setText("" if compact else b.property("full_text"))
+        self.imp.setText("" if compact else "Importer un relevé")
+        self.foot_text.setVisible(not compact)
+        self.foot_icon.setVisible(not compact)
+        self.toggle_btn.setIcon(T.icon("expand" if compact else "collapse", T.MUTED))
+        self.toggle_btn.setIconSize(QSize(18, 18))
+        self.toggle_btn.setToolTip("Déplier le menu" if compact else "Replier le menu")
+        self._update_badges()
+
+    def _toggle_sidebar(self):
+        self._compact_pref = not self._compact
+        self.settings.set("sidebar_compact", self._compact_pref)
+        self.set_compact(self._compact_pref)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._compact_pref is None:
+            self.set_compact(event.size().width() < self.COMPACT_BELOW)
+        else:
+            self.set_compact(self._compact_pref)
 
     def _update_badges(self):
         n = self.db.count_by_status().get(NONE, 0)
         self.badge.setText(str(n))
-        self.badge.setVisible(n > 0)
+        self.badge.setVisible(n > 0 and not self._compact)
+        self.nav_buttons[1].setToolTip(f"Opérations — {n} à classer" if n else "Opérations")
         self.badge.setToolTip(f"{n} opération(s) à classer")
 
     def show_page(self, idx):
