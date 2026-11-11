@@ -84,7 +84,7 @@ class ReportTree(QTreeWidget):
             value_writer(it, t)
             style_row(it, n, bold=True, bg=TOTAL_BG)
         self.header().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.setColumnWidth(0, 300)
+        self.setColumnWidth(0, 330)
         for c in range(1, n):
             self.header().setSectionResizeMode(c, QHeaderView.ResizeToContents)
 

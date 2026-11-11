@@ -147,7 +147,7 @@ def build_report(db, raw, columns, include_empty=False):
         if include_empty or children or any(total.values()) or top.id in raw:
             sections.setdefault(top.kind, []).append(node)
 
-    out_sections = [("Revenus du travail", "revenu", sections["revenu"]),
+    out_sections = [("Revenus du travail et de substitution", "revenu", sections["revenu"]),
                     ("Autres revenus", "revenu_autre", sections["revenu_autre"]),
                     ("Dépenses", "depense", sections["depense"]),
                     ("Mouvements internes", "neutre", sections["neutre"])]
@@ -171,7 +171,7 @@ def build_report(db, raw, columns, include_empty=False):
     balance = {c: rev.get(c, 0) - dep.get(c, 0) + neu.get(c, 0) + unc.get(c, 0) for c in columns}
     totals = [
         Node("Total revenus", "total", [], rev, level=0, key="rev"),
-        Node("dont revenus du travail", "total", [], work, level=0, key="work"),
+        Node("dont travail et substitution", "total", [], work, level=0, key="work"),
         Node("dont autres revenus", "total", [], other, level=0, key="other"),
         Node("Total dépenses", "total", [], dep, level=0, key="dep"),
         Node("Revenus − dépenses", "total", [], {c: rev.get(c, 0) - dep.get(c, 0) for c in columns}, level=0,
@@ -261,7 +261,7 @@ def plan_vs_actual(db, start_month, end_month):
 
     report.totals = [
         node("Total revenus", rev_r, rev_p, "rev"),
-        node("dont revenus du travail", work_r, work_p, "work"),
+        node("dont travail et substitution", work_r, work_p, "work"),
         node("dont autres revenus", other_r, other_p, "other"),
         node("Total dépenses", dep_r, dep_p, "dep"),
         node("Épargne et mouvements internes", neu_r, neu_p, "neu"),
@@ -276,7 +276,7 @@ def plan_vs_actual(db, start_month, end_month):
 
 
 REVENUE_KINDS = ("revenu", "revenu_autre")
-FAVORABLE_UP_LABELS = ("Total revenus", "dont revenus du travail", "dont autres revenus",
+FAVORABLE_UP_LABELS = ("Total revenus", "dont travail et substitution", "dont autres revenus",
                        "Épargne et mouvements internes")
 
 

@@ -12,7 +12,7 @@ from . import store
 from .normalize import extract_vendor, key_matches, label_key
 from .seed import seed_categories
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -73,15 +73,20 @@ CREATE TABLE IF NOT EXISTS forecast(
 NONE, AUTO, MANUAL = "none", "auto", "manual"
 STATUS_LABELS = {NONE: "À classer", AUTO: "Auto (à vérifier)", MANUAL: "Validée"}
 
-KINDS = {"revenu": "Revenu du travail", "revenu_autre": "Autre revenu", "depense": "Dépense",
+KINDS = {"revenu": "Revenu du travail / de substitution", "revenu_autre": "Autre revenu", "depense": "Dépense",
          "neutre": "Mouvement interne"}
 KIND_ORDER = {"revenu": 0, "revenu_autre": 1, "depense": 2, "neutre": 3}
 REVENUE_KINDS = ("revenu", "revenu_autre")
 
-# Sous-catégories de revenus considérées comme des revenus du travail (migration et suggestion)
+WORK_TOP_NAME = "Revenus du travail et de substitution"
+
+# Sous-catégories de revenus considérées comme revenus du travail ou de substitution
+# (pensions, retraites, chômage, indemnités journalières…) : migration et suggestion.
 WORK_KEYWORDS = ("SALAIRE", "REMUNERATION", "PAIE", "PRIME", "HONORAIRE", "GERANT", "TRAVAIL", "BONUS",
                  "INTERESSEMENT", "PARTICIPATION", "FREELANCE", "INDEPENDANT", "AUTO ENTREPRENEUR",
-                 "MICRO ENTREPRISE", "TREIZIEME", "13E MOIS", "VACATION", "PIGE", "DROITS D AUTEUR")
+                 "MICRO ENTREPRISE", "TREIZIEME", "13E MOIS", "VACATION", "PIGE", "DROITS D AUTEUR",
+                 "PENSION", "RETRAITE", "CHOMAGE", "POLE EMPLOI", "FRANCE TRAVAIL", "INDEMNITES JOURNALIERES",
+                 "INDEMNITE JOURNALIERE", "IJSS", "INVALIDITE", "ARE", "RENTE")
 
 MAX_BACKUPS = 10
 
@@ -172,12 +177,51 @@ class Database:
             self._split_revenues()
             self.conn.execute("INSERT OR REPLACE INTO meta VALUES('schema_version', '3')")
             self.save()
+        if version < 4:
+            self._merge_substitution_income()
+            self.conn.execute("INSERT OR REPLACE INTO meta VALUES('schema_version', '4')")
+            self.save()
+
+    def _merge_substitution_income(self):
+        """Rassemble revenus du travail et revenus de substitution (pensions, retraites, chômage…)
+        dans une même catégorie principale."""
+        self._invalidate()
+        cats = self.categories()
+        work_tops = [c for c in cats.values() if c.parent_id is None and c.kind == "revenu"]
+        names = {c.name.casefold() for c in cats.values() if c.parent_id is None}
+        target = None
+        for t in work_tops:
+            if t.name.casefold() in ("revenus du travail", WORK_TOP_NAME.casefold()):
+                target = t
+                break
+        if target is None and work_tops:
+            target = work_tops[0]
+        movers = [c for c in cats.values() if c.parent_id is not None and c.kind == "revenu_autre"
+                  and self.is_work_income(c.name)]
+        if target is None:
+            if not movers:
+                return
+            new_id = self.conn.execute("INSERT INTO categories(name, parent_id, kind) VALUES (?, NULL, 'revenu')",
+                                       (WORK_TOP_NAME,)).lastrowid
+            self._invalidate()
+            target = self.categories()[new_id]
+        elif target.name.casefold() == "revenus du travail" and WORK_TOP_NAME.casefold() not in names:
+            self.conn.execute("UPDATE categories SET name=? WHERE id=?", (WORK_TOP_NAME, target.id))
+        siblings = {c.name.casefold() for c in cats.values() if c.parent_id == target.id}
+        for c in movers:
+            name = c.name if c.name.casefold() not in siblings else f"{c.name} (substitution)"
+            siblings.add(name.casefold())
+            self.conn.execute("UPDATE categories SET parent_id=?, kind='revenu', name=? WHERE id=?",
+                              (target.id, name, c.id))
+        self._invalidate()
 
     @staticmethod
     def is_work_income(name):
         from .normalize import strip_accents
-        n = " ".join(strip_accents(name).upper().replace("'", " ").replace("-", " ").split())
-        return any(k in n for k in WORK_KEYWORDS)
+        n = " ".join("".join(ch if ch.isalnum() else " " for ch in strip_accents(name).upper()).split())
+        padded = f" {n} "
+        # mots courts (ARE…) comparés mot à mot, les autres comme début de mot (PENSION -> PENSIONS)
+        return any((f" {k} " in padded) if len(k) <= 4 else (f" {k}" in padded) for k in WORK_KEYWORDS)
 
     def _split_revenues(self):
         """Sépare les revenus du travail des autres revenus (remboursements, prestations, CPAM…).
@@ -201,9 +245,9 @@ class Database:
             if not other:
                 continue
             # la catégorie existante devient « Revenus du travail », une nouvelle accueille le reste
-            if top.name.casefold() == "revenus" and "revenus du travail" not in names:
-                self.conn.execute("UPDATE categories SET name='Revenus du travail' WHERE id=?", (top.id,))
-                names.add("revenus du travail")
+            if top.name.casefold() == "revenus" and WORK_TOP_NAME.casefold() not in names:
+                self.conn.execute("UPDATE categories SET name=? WHERE id=?", (WORK_TOP_NAME, top.id))
+                names.add(WORK_TOP_NAME.casefold())
             other_name = "Autres revenus"
             i = 2
             while other_name.casefold() in names:

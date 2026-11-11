@@ -3,10 +3,11 @@ modifiables à tout moment dans l'application)."""
 
 # (nom, type, [sous-catégories]) ; type : revenu (travail) | revenu_autre | depense | neutre
 DEFAULT_CATEGORIES = [
-    ("Revenus du travail", "revenu", ["Salaires", "Primes & intéressement", "Activité indépendante"]),
+    ("Revenus du travail et de substitution", "revenu", ["Salaires", "Primes & intéressement",
+                                                          "Activité indépendante", "Pensions & retraites",
+                                                          "Allocations chômage", "Indemnités journalières"]),
     ("Autres revenus", "revenu_autre", ["Allocations & prestations sociales", "Remboursements santé (CPAM, mutuelle)",
-                                        "Remboursements divers", "Pensions & retraites", "Revenus locatifs",
-                                        "Revenus divers"]),
+                                        "Remboursements divers", "Revenus locatifs", "Revenus divers"]),
     ("Logement", "depense", ["Loyer / crédit immobilier", "Charges de copropriété",
                              "Travaux & entretien", "Ameublement & équipement"]),
     ("Énergie", "depense", ["Électricité", "Gaz", "Eau", "Chauffage / fioul"]),

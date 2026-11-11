@@ -201,8 +201,8 @@ class DashboardPage(Page):
             return sum(nd.total(cols) for _, k, ns in rep.sections if k == "neutre" for nd in ns)
 
         self.k_rev.set(tot(cur, "rev", months), tot(prev, "rev", pmonths), True, T.GREEN)
-        self.k_rev.extra.setText(f"dont travail {fmt_eur(tot(cur, 'work', months))} · "
-                                 f"autres {fmt_eur(tot(cur, 'other', months))}")
+        self.k_rev.extra.setText(f"Travail et substitution : {fmt_eur(tot(cur, 'work', months))}\n"
+                                 f"Autres revenus : {fmt_eur(tot(cur, 'other', months))}")
         self.k_rev.extra.show()
         self.k_dep.set(tot(cur, "dep", months), tot(prev, "dep", pmonths), False)
         net = tot(cur, "net", months)
@@ -246,7 +246,7 @@ class DashboardPage(Page):
         rep12 = an.pivot(self.db, s, e)
         work = [rep12.total("work").values.get(m, 0) / 100 for m, _, _ in data]
         other = [rep12.total("other").values.get(m, 0) / 100 for m, _, _ in data]
-        ax.bar([i - w / 2 for i in x], work, w, color="#32D583", label="Revenus du travail")
+        ax.bar([i - w / 2 for i in x], work, w, color="#32D583", label="Travail et substitution")
         if any(other):
             ax.bar([i - w / 2 for i in x], other, w, bottom=work, color="#A6F4C5", label="Autres revenus")
         ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")

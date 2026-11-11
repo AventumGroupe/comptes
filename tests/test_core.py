@@ -203,7 +203,7 @@ def test_analytics(db):
     rep = analytics.pivot(db, "2026-09", "2026-10")
     assert rep.columns == ["2026-09", "2026-10"]
     titles = [s[0] for s in rep.sections]
-    assert titles == ["Revenus du travail", "Dépenses", "À classer"]
+    assert titles == ["Revenus du travail et de substitution", "Dépenses", "À classer"]
     courses = next(n for n in rep.sections[1][2] if n.label == "Courses")
     assert courses.values == {"2026-09": 5420, "2026-10": 6100}
     rev, dep, var = rep.total("rev"), rep.total("dep"), rep.total("var")
@@ -246,7 +246,7 @@ def test_migration_v1_budgets(tmp_path):
     d2 = Database.open(path, "pw")
     fc = d2.forecasts("2026-01", "2026-12")
     assert fc[sup] == {f"2026-{m:02d}": 45000 for m in range(1, 13)}
-    assert d2.get_meta("schema_version") == "3"
+    assert d2.get_meta("schema_version") == "4"
 
 
 def test_months():
@@ -275,7 +275,7 @@ def test_other_income_separated(db):
     db.save_rule("ACME", cat(db, "Salaires"))
     db.save_rule("CPAM", cat(db, "Remboursements santé (CPAM, mutuelle)"))
     rep = analytics.pivot(db, "2026-09", "2026-10")
-    assert [s[0] for s in rep.sections][:2] == ["Revenus du travail", "Autres revenus"]
+    assert [s[0] for s in rep.sections][:2] == ["Revenus du travail et de substitution", "Autres revenus"]
     assert rep.total("work").values == {"2026-09": 250000}
     assert rep.total("other").values == {"2026-10": 2300}
     assert rep.total("rev").values == {"2026-09": 250000, "2026-10": 2300}
@@ -300,12 +300,35 @@ def test_migration_v3_split_revenues(tmp_path):
 
     d2 = Database.open(path, "pw")
     cats = d2.categories()
-    assert cats[rid].name == "Revenus du travail" and cats[rid].kind == "revenu"
+    assert cats[rid].name == "Revenus du travail et de substitution" and cats[rid].kind == "revenu"
     assert cats[ids["Salaires"]].parent_id == rid and cats[ids["Rémunération gérant"]].parent_id == rid
+    assert cats[ids["Pensions & retraites"]].parent_id == rid and cats[ids["Pensions & retraites"]].kind == "revenu"
     other = cats[ids["CPAM"]].parent_id
     assert cats[other].name == "Autres revenus" and cats[other].kind == "revenu_autre"
-    for name in ("Mutuelle", "Remboursements frais", "Pensions & retraites"):
+    for name in ("Mutuelle", "Remboursements frais"):
         assert cats[ids[name]].parent_id == other and cats[ids[name]].kind == "revenu_autre"
     assert cats[ids["Autres revenus"]].name == "Revenus divers"
     assert d2.operation(op)["category_id"] == ids["CPAM"]
-    assert d2.get_meta("schema_version") == "3"
+    assert d2.get_meta("schema_version") == "4"
+
+
+def test_migration_v4_substitution(tmp_path):
+    """Dossier déjà en version 3 (travail / autres) : pensions et retraites rejoignent le travail."""
+    path = str(tmp_path / "v3.mcpt")
+    d = Database.create(path, "pw", seed=False)
+    c = d.conn
+    w = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES ('Revenus du travail', NULL, 'revenu')").lastrowid
+    o = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES ('Autres revenus', NULL, 'revenu_autre')").lastrowid
+    sal = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES ('Salaires', ?, 'revenu')", (w,)).lastrowid
+    pen = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES ('Pensions & retraites', ?, 'revenu_autre')",
+                    (o,)).lastrowid
+    cpam = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES ('CPAM', ?, 'revenu_autre')", (o,)).lastrowid
+    care = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES ('Care sitting', ?, 'revenu_autre')",
+                     (o,)).lastrowid
+    c.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
+    d.close()
+    cats = Database.open(path, "pw").categories()
+    assert cats[w].name == "Revenus du travail et de substitution"
+    assert cats[pen].parent_id == w and cats[pen].kind == "revenu"
+    assert cats[sal].parent_id == w
+    assert cats[cpam].parent_id == o and cats[care].parent_id == o  # « ARE » n'est pas reconnu dans « Care »
