@@ -230,3 +230,17 @@ def test_months():
     assert analytics.add_months("2026-01", -1) == "2025-12"
     assert analytics.month_range("2026-11", "2027-01") == ["2026-11", "2026-12", "2027-01"]
     assert analytics.month_last_day("2028-02") == "2028-02-29"
+
+
+def test_empty_categories(db):
+    db.import_operations(sample_ops())
+    db.save_rule("EDF", cat(db, "Électricité"))
+    empty = db.empty_categories()
+    names = {c.name for c, _, _ in empty}
+    assert "Électricité" not in names and "Énergie" not in names
+    assert "Gaz" in names and "Enfants" in names
+    assert "Garde / crèche" not in names  # couverte par sa catégorie principale vide
+    db.delete_categories([c.id for c, _, _ in empty])
+    remaining = {c.name for c in db.categories().values()}
+    assert remaining == {"Énergie", "Électricité"}
+    assert len(db.operations()) == 6

@@ -13,7 +13,8 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setStyle("Fusion")
+    from .ui.theme import apply_theme
+    apply_theme(app)
     icon_path = _resource("assets/icone.ico")
     if icon_path:
         app.setWindowIcon(QIcon(icon_path))

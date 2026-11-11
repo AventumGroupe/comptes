@@ -1,14 +1,15 @@
-"""Onglets « Détail catégorie » et « Graphiques »."""
+"""Pages « Détail par catégorie » et « Graphiques »."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter, QTreeWidget,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QTreeWidget
 
 from .. import analytics as an
 from ..exporters import DATE, MONEY, PCT, TEXT, TableData, export_pdf
 from ..money import fmt_eur, fmt_pct, pct_change
-from .common import (CHART_COLORS, ChartCanvas, CategoryCombo, PeriodSelector, SortItem, euro_axis, error, info,
-                     safe_filename, save_path, set_money, SORT_ROLE)
+from . import theme as T
+from .common import (CHART_COLORS, SORT_ROLE, Card, CategoryCombo, ChartCanvas, Page, PeriodSelector, SortItem,
+                     button, error, euro_axis, info, label, safe_filename, save_path, set_money, style_tree)
+from .dashboard import KpiCard
 from .operations_tab import OperationsPanel
 
 
@@ -24,60 +25,66 @@ def _month_sums(db, cat_ids, start, end):
         f"SELECT substr(date,1,7) m, SUM(amount), COUNT(*) FROM operations WHERE {where} "
         f"AND date >= ? AND date <= ? GROUP BY m", args + [an.month_first_day(start), an.month_last_day(end)]
     ).fetchall()
-    sums = {m: s * sign for m, s, _ in rows}
-    count = sum(c for _, _, c in rows)
-    return sums, count
+    return {m: s * sign for m, s, _ in rows}, sum(c for _, _, c in rows)
 
 
 # ============================================================ Détail catégorie
-class DetailTab(QWidget):
+class DetailTab(Page):
     changed = Signal()
 
     def __init__(self, db, parent=None):
-        super().__init__(parent)
+        super().__init__("Détail par catégorie", "Évolution, comparaison avec l'année précédente et "
+                                                 "principaux fournisseurs d'une catégorie.", parent, scroll=True)
         self.db = db
-        lay = QVBoxLayout(self)
+        self.add_action(button("PDF", "file", slot=self.export_pdf, tooltip="Exporter en PDF"))
         bar = QHBoxLayout()
-        bar.addWidget(QLabel("Catégorie :"))
+        bar.setSpacing(8)
         self.cat = CategoryCombo(self, with_none=True)
         bar.addWidget(self.cat)
-        bar.addSpacing(12)
+        bar.addSpacing(8)
         self.period = PeriodSelector(self, default="12 derniers mois")
         bar.addWidget(self.period)
         bar.addStretch()
-        pdf = QPushButton("Exporter PDF…")
-        pdf.clicked.connect(self.export_pdf)
-        bar.addWidget(pdf)
-        lay.addLayout(bar)
+        self.add(bar)
 
-        self.stats = QLabel()
-        self.stats.setTextFormat(Qt.RichText)
-        self.stats.setStyleSheet("font-size:11pt; padding:4px")
-        lay.addWidget(self.stats)
+        kpis = QGridLayout()
+        kpis.setSpacing(14)
+        self.k_total = KpiCard("Total sur la période")
+        self.k_avg = KpiCard("Moyenne mensuelle")
+        self.k_count = KpiCard("Nombre d'opérations")
+        for i, k in enumerate((self.k_total, self.k_avg, self.k_count)):
+            kpis.addWidget(k, 0, i)
+        self.add(kpis)
 
-        split = QSplitter(Qt.Vertical)
-        top = QSplitter(Qt.Horizontal)
-        self.canvas = ChartCanvas(self, height=3.2)
-        top.addWidget(self.canvas)
-        self.months_tree = QTreeWidget()
-        self.months_tree.setHeaderLabels(["Mois", "Montant", "Année précédente", "Écart"])
-        self.months_tree.setRootIsDecorated(False)
-        top.addWidget(self.months_tree)
+        row = QHBoxLayout()
+        row.setSpacing(14)
+        chart_card = Card()
+        self.chart_title = label("", "sectionTitle")
+        chart_card.add(self.chart_title)
+        self.canvas = ChartCanvas(chart_card, height=2.8)
+        chart_card.add(self.canvas, 1)
+        row.addWidget(chart_card, 3)
+        vcard = Card()
+        vcard.add(label("Principaux fournisseurs", "sectionTitle"))
         self.vendors = QTreeWidget()
-        self.vendors.setHeaderLabels(["Fournisseur", "Nb", "Total"])
+        style_tree(self.vendors)
+        self.vendors.setHeaderLabels(["FOURNISSEUR", "NB", "TOTAL"])
         self.vendors.setRootIsDecorated(False)
         self.vendors.setSortingEnabled(True)
-        top.addWidget(self.vendors)
-        top.setSizes([600, 360, 300])
-        split.addWidget(top)
-        self.panel = OperationsPanel(db, self)
+        vcard.add(self.vendors, 1)
+        row.addWidget(vcard, 2)
+        self.add(row, 3)
+
+        ops_card = Card()
+        ops_card.add(label("Opérations", "sectionTitle"))
+        self.panel = OperationsPanel(db, ops_card)
         self.panel.changed.connect(self._ops_changed)
-        split.addWidget(self.panel)
-        split.setSizes([330, 330])
-        lay.addWidget(split, 1)
+        ops_card.add(self.panel, 1)
+        self.add(ops_card, 3)
 
         self.cat.currentIndexChanged.connect(self.reload)
         self.period.changed.connect(self.reload)
+        self.data = None
 
     def show_category(self, cat_id):
         self.cat.set_value(cat_id)
@@ -88,6 +95,7 @@ class DetailTab(QWidget):
         self.reload()
 
     def _ops_changed(self):
+        self.reload()
         self.changed.emit()
 
     def _cat_ids(self):
@@ -96,8 +104,7 @@ class DetailTab(QWidget):
             return [None], "Opérations à classer", "none"
         if v is None:
             return None, "", ""
-        c = self.db.categories()[v]
-        return self.db.descendants(v), self.db.category_label(v), c.kind
+        return self.db.descendants(v), self.db.category_label(v), self.db.categories()[v].kind
 
     def reload(self, *_):
         cat_ids, name, kind = self._cat_ids()
@@ -106,48 +113,41 @@ class DetailTab(QWidget):
         start, end = self.period.period()
         months = an.month_range(start, end)
         sums, count = _month_sums(self.db, cat_ids, start, end)
-        prev, _ = _month_sums(self.db, cat_ids, an.add_months(start, -12), an.add_months(end, -12))
-        total = sum(sums.values())
-        total_prev = sum(prev.values())
+        prev, prev_count = _month_sums(self.db, cat_ids, an.add_months(start, -12), an.add_months(end, -12))
+        total, total_prev = sum(sums.values()), sum(prev.values())
         self.data = (name, kind, months, sums, prev)
-        verb = {"depense": "dépensé", "revenu": "reçu"}.get(kind, "net")
-        p = pct_change(total, total_prev)
+        good_up = kind == "revenu"
+        has_prev = bool(prev)
+        ref = "vs même période N-1"
+        self.k_total.set(total, total_prev if has_prev else 0, good_up, ref=ref)
+        self.k_avg.set(round(total / max(len(months), 1)),
+                       round(total_prev / max(len(months), 1)) if has_prev else 0, good_up, ref=ref)
+        self.k_count.value.setText(str(count))
+        self.k_count.delta.setText(f"<span style='color:{T.MUTED}'>{prev_count} l'année précédente</span>"
+                                   if has_prev else "")
         covered = sum(1 for m in months if an.add_months(m, -12) in prev)
-        partial = f", {covered} mois de données sur {len(months)}" if covered < len(months) else ""
-        cmp_txt = f" — année précédente : {fmt_eur(total_prev)} ({fmt_pct(p)}{partial})" if total_prev else ""
-        self.stats.setText(f"<b>{name}</b> — total {verb} : <b>{fmt_eur(total)}</b> sur {len(months)} mois, "
-                           f"soit <b>{fmt_eur(round(total / max(len(months), 1)))}</b> / mois en moyenne — "
-                           f"{count} opération(s){cmp_txt}")
+        if has_prev and covered < len(months):
+            self.k_total.delta.setText(self.k_total.delta.text() +
+                                       f"<br><span style='color:{T.SUBTLE}'>N-1 : {covered} mois de données "
+                                       f"sur {len(months)}</span>")
+        self.chart_title.setText(f"{name} — par mois")
 
-        # graphique
         fig = self.canvas.figure
         fig.clear()
         ax = fig.add_subplot(111)
         x = list(range(len(months)))
-        ax.bar(x, [sums.get(m, 0) / 100 for m in months], color=CHART_COLORS[0], label="Période")
-        if any(prev.values()):
+        color = T.category_color(self.db, cat_ids[0]).name() if cat_ids != [None] else T.ORANGE
+        ax.bar(x, [sums.get(m, 0) / 100 for m in months], color=color, width=0.6, label="Période")
+        if has_prev:
             ax.plot(x, [prev[an.add_months(m, -12)] / 100 if an.add_months(m, -12) in prev else float("nan")
-                        for m in months], color=CHART_COLORS[1],
-                    marker="o", linestyle="--", label="Année précédente")
-            ax.legend(loc="upper left", fontsize=8, frameon=False)
+                        for m in months], color=T.TEXT, marker="o", markersize=3.5, linestyle="--",
+                    linewidth=1.2, label="Année précédente")
+            ax.legend(loc="upper left", fontsize=8)
         ax.set_xticks(x, [an.month_label(m) for m in months], rotation=45 if len(months) > 6 else 0,
                       ha="right" if len(months) > 6 else "center", fontsize=8)
         euro_axis(ax)
-        ax.set_title(name, fontsize=10)
         self.canvas.draw_idle()
 
-        # tableau par mois
-        self.months_tree.clear()
-        for m in months:
-            it = SortItem(self.months_tree, [an.month_label(m, full=True)])
-            v, pv = sums.get(m, 0), prev.get(an.add_months(m, -12), 0)
-            set_money(it, 1, v, blank_zero=False)
-            set_money(it, 2, pv)
-            set_money(it, 3, v - pv if pv else 0, colorize=True, invert=(kind == "depense"), signed=True)
-        for c in range(4):
-            self.months_tree.resizeColumnToContents(c)
-
-        # fournisseurs
         self.vendors.clear()
         sign = an.sign_for(kind) if kind in ("depense", "revenu") else 1
         for vendor, n, s in an.top_vendors(self.db, cat_ids, start, end, limit=50, uncategorized=cat_ids == [None]):
@@ -155,13 +155,15 @@ class DetailTab(QWidget):
             it.setData(1, SORT_ROLE, n)
             set_money(it, 2, s * sign)
         self.vendors.sortItems(2, Qt.DescendingOrder)
-        for c in range(3):
-            self.vendors.resizeColumnToContents(c)
+        self.vendors.resizeColumnToContents(1)
+        self.vendors.setColumnWidth(0, 200)
 
         kw = {"uncategorized": True} if cat_ids == [None] else {"cat_ids": cat_ids}
         self.panel.set_rows(self.db.operations(start=an.month_first_day(start), end=an.month_last_day(end), **kw))
 
     def export_pdf(self):
+        if not self.data:
+            return
         name, kind, months, sums, prev = self.data
         path = save_path(self, "Exporter", f"detail {safe_filename(name)}.pdf", "PDF (*.pdf)")
         if not path:
@@ -187,33 +189,29 @@ class DetailTab(QWidget):
 
 
 # ================================================================= Graphiques
-class ChartsTab(QWidget):
+class ChartsTab(Page):
     CHARTS = ["Revenus et dépenses par mois", "Répartition des dépenses", "Évolution des dépenses par catégorie",
               "Solde du compte en fin de mois"]
 
     def __init__(self, db, parent=None):
-        super().__init__(parent)
+        super().__init__("Graphiques", "Visualisez vos finances sous différents angles.", parent)
         self.db = db
-        lay = QVBoxLayout(self)
+        self.add_action(button("Image", "download", slot=self.export_png, tooltip="Exporter en image PNG"))
+        self.add_action(button("PDF", "file", slot=self.export_pdf, tooltip="Exporter en PDF"))
         bar = QHBoxLayout()
-        bar.addWidget(QLabel("Graphique :"))
+        bar.setSpacing(8)
         self.kind = QComboBox()
         self.kind.addItems(self.CHARTS)
         bar.addWidget(self.kind)
-        bar.addSpacing(12)
+        bar.addSpacing(8)
         self.period = PeriodSelector(self, default="12 derniers mois")
         bar.addWidget(self.period)
         bar.addStretch()
-        png = QPushButton("Image PNG…")
-        png.clicked.connect(self.export_png)
-        pdf = QPushButton("PDF…")
-        pdf.clicked.connect(self.export_pdf)
-        bar.addWidget(QLabel("Exporter :"))
-        bar.addWidget(png)
-        bar.addWidget(pdf)
-        lay.addLayout(bar)
-        self.canvas = ChartCanvas(self, height=5)
-        lay.addWidget(self.canvas, 1)
+        self.add(bar)
+        card = Card(margins=(18, 16, 18, 16))
+        self.canvas = ChartCanvas(card, height=5)
+        card.add(self.canvas, 1)
+        self.add(card, 1)
         self.kind.currentIndexChanged.connect(self.reload)
         self.period.changed.connect(self.reload)
 
@@ -233,61 +231,67 @@ class ChartsTab(QWidget):
         rot = dict(rotation=45, ha="right") if len(months) > 8 else {}
         if k == 0:
             data = an.monthly_totals(self.db, start, end)
-            w = 0.4
-            ax.bar([i - w / 2 for i in x], [r / 100 for _, r, _ in data], w, color="#27AE60", label="Revenus")
-            ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color="#C0392B", label="Dépenses")
-            ax.plot(x, [(r - d) / 100 for _, r, d in data], color="#2E86C1", marker="o", label="Revenus − dépenses")
-            ax.axhline(0, color="#999", linewidth=0.8)
+            w = 0.38
+            ax.bar([i - w / 2 for i in x], [r / 100 for _, r, _ in data], w, color="#32D583", label="Revenus")
+            ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")
+            ax.plot(x, [(r - d) / 100 for _, r, d in data], color=T.TEXT, marker="o", markersize=4,
+                    label="Revenus − dépenses")
+            ax.axhline(0, color=T.BORDER_STRONG, linewidth=0.8)
             top = max([r / 100 for _, r, _ in data] + [d / 100 for _, _, d in data] + [1])
             ax.set_ylim(top=top * 1.2)
             ax.set_xticks(x, labels, fontsize=8, **rot)
-            ax.legend(frameon=False, fontsize=9, loc="upper center", ncol=3)
+            ax.legend(fontsize=9, loc="upper left", ncol=3)
             euro_axis(ax)
         elif k == 1:
             rep = an.pivot(self.db, start, end)
-            nodes = [n for t, kind, ns in rep.sections if kind == "depense" for n in ns]
-            vals = sorted(((n.label, n.total(months)) for n in nodes if n.total(months) > 0), key=lambda x: -x[1])
+            nodes = [n for _, kind, ns in rep.sections if kind == "depense" for n in ns]
+            vals = sorted(((n.label, n.total(months), n.cat_id) for n in nodes if n.total(months) > 0),
+                          key=lambda v: -v[1])
             if len(vals) > 10:
-                vals = vals[:9] + [("Autres", sum(v for _, v in vals[9:]))]
-            total = sum(v for _, v in vals)
+                vals = vals[:9] + [("Autres", sum(v for _, v, _ in vals[9:]), None)]
+            total = sum(v for _, v, _ in vals)
             if total:
-                wedges, _ = ax.pie([v for _, v in vals], colors=CHART_COLORS[:len(vals)], startangle=90,
-                                   counterclock=False, wedgeprops=dict(width=0.42, edgecolor="white"))
-                ax.legend(wedges, [f"{lbl} — {fmt_eur(v)} ({v / total * 100:.0f} %)" for lbl, v in vals],
-                          loc="center left", bbox_to_anchor=(1, 0.5), frameon=False, fontsize=9)
-                ax.text(0, 0, f"Total\n{fmt_eur(total)}", ha="center", va="center", fontsize=11, weight="bold")
+                colors = [T.category_color(self.db, c).name() if c else T.SUBTLE for _, _, c in vals]
+                wedges, _ = ax.pie([v for _, v, _ in vals], colors=colors, startangle=90, counterclock=False,
+                                   wedgeprops=dict(width=0.38, edgecolor="white", linewidth=2))
+                ax.legend(wedges, [f"{lbl} — {fmt_eur(v)} ({v / total * 100:.0f} %)" for lbl, v, _ in vals],
+                          loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
+                ax.text(0, 0.06, fmt_eur(total), ha="center", va="center", fontsize=13, weight="bold", color=T.TEXT)
+                ax.text(0, -0.12, "de dépenses", ha="center", va="center", fontsize=9, color=T.MUTED)
                 ax.set_aspect("equal")
             else:
-                ax.text(0.5, 0.5, "Aucune dépense classée sur la période", ha="center", transform=ax.transAxes)
+                ax.text(0.5, 0.5, "Aucune dépense classée sur la période", ha="center", transform=ax.transAxes,
+                        color=T.MUTED)
                 ax.axis("off")
         elif k == 2:
             rep = an.pivot(self.db, start, end)
-            nodes = [n for t, kind, ns in rep.sections if kind == "depense" for n in ns]
+            nodes = [n for _, kind, ns in rep.sections if kind == "depense" for n in ns]
             nodes.sort(key=lambda n: -n.total(months))
             main, rest = nodes[:8], nodes[8:]
             bottom = [0] * len(months)
-            series = [(n.label, [n.values.get(m, 0) / 100 for m in months]) for n in main]
+            series = [(n.label, [n.values.get(m, 0) / 100 for m in months], T.category_color(self.db, n.cat_id).name())
+                      for n in main]
             if rest:
-                series.append(("Autres", [sum(n.values.get(m, 0) for n in rest) / 100 for m in months]))
-            for i, (lbl, vals) in enumerate(series):
-                ax.bar(x, vals, bottom=bottom, color=CHART_COLORS[i % len(CHART_COLORS)], label=lbl)
+                series.append(("Autres", [sum(n.values.get(m, 0) for n in rest) / 100 for m in months], T.SUBTLE))
+            for lbl, vals, col in series:
+                ax.bar(x, vals, bottom=bottom, color=col, label=lbl, width=0.65, edgecolor="white", linewidth=0.6)
                 bottom = [b + v for b, v in zip(bottom, vals)]
             ax.set_xticks(x, labels, fontsize=8, **rot)
-            ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), frameon=False, fontsize=9)
+            ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
             euro_axis(ax)
         else:
             series = an.account_balance_series(self.db, start, end)
             vals = [(i, b / 100) for i, (_, b) in enumerate(series) if b is not None]
             if vals:
-                ax.plot([i for i, _ in vals], [v for _, v in vals], color="#2E86C1", marker="o")
-                ax.fill_between([i for i, _ in vals], [v for _, v in vals], alpha=0.1, color="#2E86C1")
+                ax.plot([i for i, _ in vals], [v for _, v in vals], color=T.ACCENT, marker="o", markersize=4)
+                ax.fill_between([i for i, _ in vals], [v for _, v in vals], alpha=0.08, color=T.ACCENT)
                 ax.set_xticks(x, labels, fontsize=8, **rot)
                 euro_axis(ax)
             else:
                 ax.text(0.5, 0.5, "Le relevé importé ne contient pas de colonne « Solde ».", ha="center",
-                        transform=ax.transAxes)
+                        transform=ax.transAxes, color=T.MUTED)
                 ax.axis("off")
-        ax.set_title(f"{self.CHARTS[k]} — {self.period.label()}", fontsize=11)
+        ax.set_title(f"{self.CHARTS[k]} — {self.period.label()}")
         self.canvas.draw_idle()
 
     def export_png(self):
@@ -308,3 +312,6 @@ class ChartsTab(QWidget):
             error(self, f"Export impossible : {e}")
             return
         info(self, f"Export enregistré :\n{path}")
+
+
+__all__ = ["CHART_COLORS", "fmt_pct"]

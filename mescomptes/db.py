@@ -282,6 +282,32 @@ class Database:
         nb_rules = self.conn.execute(f"SELECT COUNT(*) FROM rules WHERE category_id IN ({q})", ids).fetchone()[0]
         return nb_ops, nb_rules
 
+    def empty_categories(self):
+        """Catégories sans aucune opération (une catégorie principale n'est vide que si toutes
+        ses sous-catégories le sont). Retourne [(Category, nb_règles, a_un_budget)], principales d'abord."""
+        used = {r[0] for r in self.conn.execute("SELECT DISTINCT category_id FROM operations "
+                                                "WHERE category_id IS NOT NULL")}
+        rules = dict(self.conn.execute("SELECT category_id, COUNT(*) FROM rules GROUP BY category_id").fetchall())
+        budgets = {r[0] for r in self.conn.execute("SELECT DISTINCT category_id FROM budgets")}
+        out = []
+        for top, subs in self.category_tree():
+            empty_subs = [s for s in subs if s.id not in used]
+            if top.id not in used and len(empty_subs) == len(subs):
+                out.append((top, rules.get(top.id, 0) + sum(rules.get(s.id, 0) for s in subs),
+                            top.id in budgets or any(s.id in budgets for s in subs)))
+            else:
+                out += [(s, rules.get(s.id, 0), s.id in budgets) for s in empty_subs]
+        return out
+
+    def delete_categories(self, cat_ids):
+        """Suppression groupée (catégories sans opération)."""
+        for cid in cat_ids:
+            if cid in self.categories():
+                self.conn.execute("DELETE FROM categories WHERE id=?", (cid,))
+                self._invalidate()
+        self.apply_rules(save=False)
+        self.save()
+
     def delete_category(self, cat_id, reassign_to=None):
         """Supprime une catégorie et ses sous-catégories. Les opérations et règles
         concernées sont transférées vers ``reassign_to`` ou, à défaut, les opérations

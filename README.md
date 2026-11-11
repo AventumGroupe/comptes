@@ -10,15 +10,16 @@ Application Windows autonome pour classer et analyser les opérations d'un relev
 
 ## Fonctionnalités
 
-| Onglet | Rôle |
+| Page | Rôle |
 |---|---|
-| Opérations | Import du relevé Excel (.xlsx/.xls) ou CSV, liste filtrable, classement, validation, notes |
+| Tableau de bord | Indicateurs clés de la période, évolution sur 12 mois, principales dépenses, dernières opérations |
+| Opérations | Import du relevé, liste filtrable, volet de classement à droite (passage automatique à l'opération suivante) |
 | Synthèse mensuelle | Tableau catégories × mois, total, moyenne, écarts vs mois précédent (€ ou %) |
 | Comparaison | Mois vs mois précédent, vs même mois N-1, période vs N-1, deux périodes libres |
 | Détail par catégorie | Graphique mensuel avec N-1, principaux fournisseurs, liste des opérations |
 | Graphiques | Revenus/dépenses, répartition, évolution par catégorie, solde du compte |
 | Budget | Budget mensuel par catégorie et par année, suivi budget/réalisé |
-| Catégories | Deux niveaux, type (revenu, dépense, mouvement interne), ajout, renommage, déplacement, suppression |
+| Catégories | Deux niveaux, type (revenu, dépense, mouvement interne), ajout, renommage, déplacement, suppression, nettoyage des catégories vides |
 | Règles | Règles apprises « le libellé contient… → catégorie », modifiables, testables |
 
 Exports **Excel** et **PDF** depuis chaque vue d'analyse.

@@ -22,7 +22,10 @@ def run(tmp_path):
     from mescomptes.exporters import export_excel, export_pdf
     from mescomptes.settings import Settings
     from mescomptes.ui import main_window as mw
-    from mescomptes.ui.dialogs import ClassifyDialog, ImportDialog
+    from mescomptes.ui.classify import ClassifyDialog
+    from mescomptes.ui.dialogs import ImportDialog
+    from mescomptes.ui.theme import apply_theme
+    apply_theme(app)
 
     mw.MainWindow._welcome = lambda self: None
     xlsx = str(tmp_path / "releve.xlsx")
@@ -41,7 +44,7 @@ def run(tmp_path):
     op = [dict(o) for o in db.operations() if "CARREFOUR" in o["label"]][0]
     cd = ClassifyDialog(db, [op])
     assert cd.r_rule.isChecked() and cd.pattern.text() == "CARREFOUR MARKET"
-    cd.combo.set_value(cat("Supermarché"))
+    cd.panel.picker.set_value(cat("Supermarché"))
     cd._accept()
     assert db.operation(op["id"])["status"] == "manual"
     assert all(o["category_id"] == cat("Supermarché") for o in db.operations() if "CARREFOUR" in o["label"])
@@ -56,8 +59,8 @@ def run(tmp_path):
 
     win = mw.MainWindow(db, Settings(str(tmp_path / "prefs.json")))
     win.show()
-    for i in range(win.tabs.count()):
-        win.tabs.setCurrentIndex(i)
+    for i in range(len(win.pages)):
+        win.show_page(i)
         app.processEvents()
     for k in range(win.charts_tab.kind.count()):
         win.charts_tab.kind.setCurrentIndex(k)
@@ -66,6 +69,39 @@ def run(tmp_path):
     for k in range(win.compare_tab.mode.count()):
         win.compare_tab.mode.setCurrentIndex(k)
     win.detail_tab.show_category(cat("Courses"))
+
+    # Volet de classement : sélection d'une opération à classer puis enregistrement -> passe à la suivante
+    win.go_todo()
+    app.processEvents()
+    todo_before = db.count_by_status().get("none", 0)
+    first = win.ops_tab.view.selected_rows()
+    assert first and first[0]["status"] == "none"
+    panel = win.ops_tab.panel
+    panel.picker.set_value(cat("Divers"))
+    assert panel.r_rule.isChecked() and panel.btn_apply.isEnabled()
+    panel.apply()
+    app.processEvents()
+    assert db.count_by_status().get("none", 0) < todo_before
+    nxt = win.ops_tab.view.selected_rows()
+    assert nxt and nxt[0]["status"] == "none" and nxt[0]["id"] != first[0]["id"]
+
+    # Comparaison : la période B est modifiable et bascule en « période libre »
+    ct = win.compare_tab
+    win.show_page(3)
+    ct.mode.setCurrentIndex(0)
+    ct.pb.set_period("2025-10", "2025-11")
+    assert ct.mode.currentIndex() == ct.FREE and ct.pb.period() == ("2025-10", "2025-11")
+    assert "oct. 2025" in ct.headers[2] or "octobre 2025" in ct.headers[2]
+
+    # Nettoyage des catégories vides
+    from mescomptes.ui.settings_tabs import CleanupDialog
+    dlg_c = CleanupDialog(db)
+    ids = dlg_c.selected()
+    assert ids
+    db.delete_categories(ids)
+    assert not db.empty_categories()
+    win.data_changed()
+    win.show_page(0)
     app.processEvents()
 
     export_excel(str(tmp_path / "s.xlsx"), [win.summary_tab.table()])
