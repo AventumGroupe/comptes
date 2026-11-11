@@ -12,7 +12,7 @@ from . import store
 from .normalize import extract_vendor, key_matches, label_key
 from .seed import seed_categories
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -73,8 +73,15 @@ CREATE TABLE IF NOT EXISTS forecast(
 NONE, AUTO, MANUAL = "none", "auto", "manual"
 STATUS_LABELS = {NONE: "À classer", AUTO: "Auto (à vérifier)", MANUAL: "Validée"}
 
-KINDS = {"revenu": "Revenu", "depense": "Dépense", "neutre": "Mouvement interne"}
-KIND_ORDER = {"revenu": 0, "depense": 1, "neutre": 2}
+KINDS = {"revenu": "Revenu du travail", "revenu_autre": "Autre revenu", "depense": "Dépense",
+         "neutre": "Mouvement interne"}
+KIND_ORDER = {"revenu": 0, "revenu_autre": 1, "depense": 2, "neutre": 3}
+REVENUE_KINDS = ("revenu", "revenu_autre")
+
+# Sous-catégories de revenus considérées comme des revenus du travail (migration et suggestion)
+WORK_KEYWORDS = ("SALAIRE", "REMUNERATION", "PAIE", "PRIME", "HONORAIRE", "GERANT", "TRAVAIL", "BONUS",
+                 "INTERESSEMENT", "PARTICIPATION", "FREELANCE", "INDEPENDANT", "AUTO ENTREPRENEUR",
+                 "MICRO ENTREPRISE", "TREIZIEME", "13E MOIS", "VACATION", "PIGE", "DROITS D AUTEUR")
 
 MAX_BACKUPS = 10
 
@@ -161,6 +168,55 @@ class Database:
                 self.conn.execute("DROP TABLE budgets")
             self.conn.execute("INSERT OR REPLACE INTO meta VALUES('schema_version', '2')")
             self.save()
+        if version < 3:
+            self._split_revenues()
+            self.conn.execute("INSERT OR REPLACE INTO meta VALUES('schema_version', '3')")
+            self.save()
+
+    @staticmethod
+    def is_work_income(name):
+        from .normalize import strip_accents
+        n = " ".join(strip_accents(name).upper().replace("'", " ").replace("-", " ").split())
+        return any(k in n for k in WORK_KEYWORDS)
+
+    def _split_revenues(self):
+        """Sépare les revenus du travail des autres revenus (remboursements, prestations, CPAM…).
+        Chaque catégorie de revenus est scindée selon le nom de ses sous-catégories."""
+        self._invalidate()
+        cats = self.categories()
+        tops = [c for c in cats.values() if c.parent_id is None and c.kind == "revenu"]
+        names = {c.name.casefold() for c in cats.values() if c.parent_id is None}
+        for top in tops:
+            subs = [c for c in cats.values() if c.parent_id == top.id]
+            work = [s for s in subs if self.is_work_income(s.name)]
+            other = [s for s in subs if not self.is_work_income(s.name)]
+            if not subs:
+                if not self.is_work_income(top.name):
+                    self.conn.execute("UPDATE categories SET kind='revenu_autre' WHERE id=?", (top.id,))
+                continue
+            if not work:
+                self.conn.execute("UPDATE categories SET kind='revenu_autre' WHERE id=? OR parent_id=?",
+                                  (top.id, top.id))
+                continue
+            if not other:
+                continue
+            # la catégorie existante devient « Revenus du travail », une nouvelle accueille le reste
+            if top.name.casefold() == "revenus" and "revenus du travail" not in names:
+                self.conn.execute("UPDATE categories SET name='Revenus du travail' WHERE id=?", (top.id,))
+                names.add("revenus du travail")
+            other_name = "Autres revenus"
+            i = 2
+            while other_name.casefold() in names:
+                other_name = f"Autres revenus {i}"
+                i += 1
+            names.add(other_name.casefold())
+            new_id = self.conn.execute("INSERT INTO categories(name, parent_id, kind) VALUES (?, NULL, "
+                                       "'revenu_autre')", (other_name,)).lastrowid
+            for s in other:
+                new_name = "Revenus divers" if s.name.casefold() == other_name.casefold() else s.name
+                self.conn.execute("UPDATE categories SET parent_id=?, kind='revenu_autre', name=? WHERE id=?",
+                                  (new_id, new_name, s.id))
+        self._invalidate()
 
     def save(self):
         self.conn.commit()
@@ -582,6 +638,6 @@ class Database:
             c = cats.get(cat)
             if c is None:
                 continue
-            sign = 1 if c.kind == "revenu" else -1
+            sign = 1 if c.kind in REVENUE_KINDS else -1
             out[cat] = round(sign * total / n)
         return out

@@ -92,6 +92,7 @@ class Node:
     children: list = field(default_factory=list)
     level: int = 1                  # 0 = section/total, 1 = catégorie, 2 = sous-catégorie
     cat_id: int = None
+    key: str = ""                   # identifiant des lignes de total (rev, work, other, dep, net, var…)
 
     def total(self, cols):
         return sum(self.values.get(c, 0) for c in cols)
@@ -115,13 +116,16 @@ class Report:
     totals: list            # [Node]
     columns: list
 
+    def total(self, key):
+        return next(t for t in self.totals if t.key == key)
+
 
 def build_report(db, raw, columns, include_empty=False):
     """raw : {cat_id ou None: {colonne: centimes signés}}.
     Retourne un Report avec montants présentés, agrégés par catégorie principale."""
     cats = db.categories()
     tree = db.category_tree()
-    sections = {"revenu": [], "depense": [], "neutre": []}
+    sections = {"revenu": [], "revenu_autre": [], "depense": [], "neutre": []}
     for top, subs in tree:
         sgn = sign_for(top.kind)
         top_vals = _scale(raw.get(top.id, {}), sgn)
@@ -143,7 +147,8 @@ def build_report(db, raw, columns, include_empty=False):
         if include_empty or children or any(total.values()) or top.id in raw:
             sections.setdefault(top.kind, []).append(node)
 
-    out_sections = [("Revenus", "revenu", sections["revenu"]),
+    out_sections = [("Revenus du travail", "revenu", sections["revenu"]),
+                    ("Autres revenus", "revenu_autre", sections["revenu_autre"]),
                     ("Dépenses", "depense", sections["depense"]),
                     ("Mouvements internes", "neutre", sections["neutre"])]
     uncategorized = raw.get(UNCATEGORIZED, {})
@@ -159,14 +164,19 @@ def build_report(db, raw, columns, include_empty=False):
                     acc = _add(acc, n.values)
         return acc
 
-    rev, dep, neu = section_sum("revenu"), section_sum("depense"), section_sum("neutre")
+    work, other = section_sum("revenu"), section_sum("revenu_autre")
+    rev = _add(work, other)
+    dep, neu = section_sum("depense"), section_sum("neutre")
     unc = dict(uncategorized)
     balance = {c: rev.get(c, 0) - dep.get(c, 0) + neu.get(c, 0) + unc.get(c, 0) for c in columns}
     totals = [
-        Node("Total revenus", "total", [], rev, level=0),
-        Node("Total dépenses", "total", [], dep, level=0),
-        Node("Revenus − dépenses", "total", [], {c: rev.get(c, 0) - dep.get(c, 0) for c in columns}, level=0),
-        Node("Variation du compte (toutes opérations)", "total", [], balance, level=0),
+        Node("Total revenus", "total", [], rev, level=0, key="rev"),
+        Node("dont revenus du travail", "total", [], work, level=0, key="work"),
+        Node("dont autres revenus", "total", [], other, level=0, key="other"),
+        Node("Total dépenses", "total", [], dep, level=0, key="dep"),
+        Node("Revenus − dépenses", "total", [], {c: rev.get(c, 0) - dep.get(c, 0) for c in columns}, level=0,
+             key="net"),
+        Node("Variation du compte (toutes opérations)", "total", [], balance, level=0, key="var"),
     ]
     return Report([s for s in out_sections if s[2]], totals, columns)
 
@@ -234,12 +244,14 @@ def plan_vs_actual(db, start_month, end_month):
                         acc[m] = acc.get(m, 0) + v
         return acc
 
-    rev_r, dep_r, neu_r, unc = (total("revenu", "values"), total("depense", "values"), total("neutre", "values"),
-                                total("none", "values"))
-    rev_p, dep_p, neu_p = total("revenu", "plan"), total("depense", "plan"), total("neutre", "plan")
+    work_r, other_r = total("revenu", "values"), total("revenu_autre", "values")
+    work_p, other_p = total("revenu", "plan"), total("revenu_autre", "plan")
+    rev_r, rev_p = _add(work_r, other_r), _add(work_p, other_p)
+    dep_r, neu_r, unc = total("depense", "values"), total("neutre", "values"), total("none", "values")
+    dep_p, neu_p = total("depense", "plan"), total("neutre", "plan")
 
-    def node(label, real, plan):
-        n = Node(label, "total", [], real, level=0)
+    def node(label, real, plan, key):
+        n = Node(label, "total", [], real, level=0, key=key)
         n.plan = plan
         return n
 
@@ -248,10 +260,13 @@ def plan_vs_actual(db, start_month, end_month):
         return {m: r.get(m, 0) - d.get(m, 0) - nn.get(m, 0) + u.get(m, 0) for m in months}
 
     report.totals = [
-        node("Total revenus", rev_r, rev_p),
-        node("Total dépenses", dep_r, dep_p),
-        node("Épargne et mouvements internes", neu_r, neu_p),
-        node("Solde (revenus − dépenses − épargne)", solde(rev_r, dep_r, neu_r, unc), solde(rev_p, dep_p, neu_p)),
+        node("Total revenus", rev_r, rev_p, "rev"),
+        node("dont revenus du travail", work_r, work_p, "work"),
+        node("dont autres revenus", other_r, other_p, "other"),
+        node("Total dépenses", dep_r, dep_p, "dep"),
+        node("Épargne et mouvements internes", neu_r, neu_p, "neu"),
+        node("Solde (revenus − dépenses − épargne)", solde(rev_r, dep_r, neu_r, unc), solde(rev_p, dep_p, neu_p),
+             "solde"),
     ]
     for _, _k, nodes in report.sections:
         for n in nodes:
@@ -260,10 +275,14 @@ def plan_vs_actual(db, start_month, end_month):
     return report
 
 
+REVENUE_KINDS = ("revenu", "revenu_autre")
+FAVORABLE_UP_LABELS = ("Total revenus", "dont revenus du travail", "dont autres revenus",
+                       "Épargne et mouvements internes")
+
+
 def favorable_gap(kind, plan, real, label=""):
     """Écart orienté : positif = favorable (moins dépensé, plus reçu, solde meilleur)."""
-    if kind in ("revenu", "neutre") or label in ("Total revenus", "Épargne et mouvements internes") \
-            or label.startswith("Solde"):
+    if kind in REVENUE_KINDS + ("neutre",) or label in FAVORABLE_UP_LABELS or label.startswith("Solde"):
         return real - plan
     return plan - real
 
@@ -271,7 +290,7 @@ def favorable_gap(kind, plan, real, label=""):
 def monthly_totals(db, start_month, end_month):
     """Par mois : revenus, dépenses (positives), solde net (revenus − dépenses)."""
     rep = pivot(db, start_month, end_month)
-    rev, dep = rep.totals[0].values, rep.totals[1].values
+    rev, dep = rep.total("rev").values, rep.total("dep").values
     return [(m, rev.get(m, 0), dep.get(m, 0)) for m in rep.columns]
 
 

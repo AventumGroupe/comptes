@@ -20,7 +20,7 @@ Application Windows autonome pour classer et analyser les opérations d'un relev
 | Graphiques | Revenus/dépenses, répartition, évolution par catégorie, solde du compte — clic sur une catégorie ou une barre pour voir les opérations |
 | Prévisionnel | Saisie mois par mois sur 12 à 24 mois, recopie sur les mois suivants, pré-remplissage depuis le réalisé |
 | Prévu / réalisé | Écarts par catégorie : synthèse de la période, écarts mois par mois, réalisé / prévu mois par mois |
-| Catégories | Deux niveaux, type (revenu, dépense, mouvement interne), ajout, renommage, déplacement, suppression, nettoyage des catégories vides |
+| Catégories | Deux niveaux, type (revenu du travail, autre revenu, dépense, mouvement interne), ajout, renommage, déplacement, suppression, nettoyage des catégories vides |
 | Règles | Règles apprises « le libellé contient… → catégorie », modifiables, testables |
 
 Exports **Excel** et **PDF** depuis chaque vue d'analyse.

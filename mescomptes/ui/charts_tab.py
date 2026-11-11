@@ -131,7 +131,7 @@ class DetailTab(Page):
         prev, prev_count = _month_sums(self.db, cat_ids, an.add_months(start, -12), an.add_months(end, -12))
         total, total_prev = sum(sums.values()), sum(prev.values())
         self.data = (name, kind, months, sums, prev)
-        good_up = kind == "revenu"
+        good_up = kind in ("revenu", "revenu_autre")
         has_prev = bool(prev)
         ref = "vs même période N-1"
         self.k_total.set(total, total_prev if has_prev else 0, good_up, ref=ref)
@@ -168,7 +168,7 @@ class DetailTab(Page):
         self.canvas.draw_idle()
 
         self.vendors.clear()
-        sign = an.sign_for(kind) if kind in ("depense", "revenu") else 1
+        sign = an.sign_for(kind) if kind in ("depense", "revenu", "revenu_autre") else 1
         for vendor, n, s in an.top_vendors(self.db, cat_ids, start, end, limit=50, uncategorized=cat_ids == [None]):
             it = SortItem(self.vendors, [vendor or "(inconnu)", str(n)])
             it.setData(1, SORT_ROLE, n)
@@ -288,7 +288,8 @@ class ChartsTab(Page):
             w = 0.38
             rb = ax.bar([i - w / 2 for i in x], [r / 100 for _, r, _ in data], w, color="#32D583", label="Revenus")
             db_ = ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")
-            rev_ids, dep_ids = self._kind_ids("revenu"), self._kind_ids("depense")
+            rev_ids = self._kind_ids("revenu") + self._kind_ids("revenu_autre")
+            dep_ids = self._kind_ids("depense")
             for m, r1, r2 in zip(months, rb, db_):
                 self._register(r1, f"Revenus — {an.month_label(m, full=True)}", rev_ids, m, m)
                 self._register(r2, f"Dépenses — {an.month_label(m, full=True)}", dep_ids, m, m)

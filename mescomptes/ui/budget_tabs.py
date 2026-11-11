@@ -16,7 +16,8 @@ from .common import (COLOR_ROLE, GREEN, GREY, RED, SECTION_BG, SORT_ROLE, TEXT a
 from .report_tabs import NODE_ROLE, OperationsDialog, ReportTree, do_export, export_buttons
 
 CAT_ROLE = Qt.UserRole + 30
-SECTION_TITLES = {"revenu": "Revenus", "depense": "Dépenses", "neutre": "Épargne et mouvements internes"}
+SECTION_TITLES = {"revenu": "Revenus du travail", "revenu_autre": "Autres revenus", "depense": "Dépenses",
+                  "neutre": "Épargne et mouvements internes"}
 
 
 class _ReadOnlyDot(DotDelegate):
@@ -165,8 +166,11 @@ class ForecastPage(Page):
                 it.setExpanded(self._expanded.get(top.id, False))
             sec.setExpanded(True)
 
-        rev, dep, neu = totals["revenu"], totals["depense"], totals["neutre"]
-        for title, vals, signed in (("Revenus prévus", rev, False), ("Dépenses prévues", dep, False),
+        work, other = totals["revenu"], totals["revenu_autre"]
+        rev = {m: work[m] + other[m] for m in months}
+        dep, neu = totals["depense"], totals["neutre"]
+        for title, vals, signed in (("Revenus prévus", rev, False), ("dont revenus du travail", work, False),
+                                    ("dont autres revenus", other, False), ("Dépenses prévues", dep, False),
                                     ("Épargne prévue", neu, False),
                                     ("Solde prévisionnel", {m: rev[m] - dep[m] - neu[m] for m in months}, True)):
             t = SortItem(self.tree, [title])
@@ -442,7 +446,7 @@ class PlanActualPage(Page):
             item.setForeground(col, color)
 
     def _draw_chart(self, rep, months):
-        rev, dep = rep.totals[0], rep.totals[1]
+        rev, dep = rep.total("rev"), rep.total("dep")
         fig = self.canvas.figure
         fig.clear()
         ax = fig.add_subplot(111)

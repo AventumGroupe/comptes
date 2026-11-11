@@ -18,8 +18,12 @@ class KpiCard(Card):
         self.value = label("—", "kpiValue")
         self.delta = label("", "muted")
         self.delta.setTextFormat(Qt.RichText)
+        self.extra = label("", "muted")
+        self.extra.setStyleSheet("font-size:8.5pt")
+        self.extra.hide()
         self.add(self.title)
         self.add(self.value)
+        self.add(self.extra)
         self.add(self.delta)
 
     def set(self, cents, previous, good_when_up=True, color=None, ref="vs période précédente"):
@@ -166,16 +170,19 @@ class DashboardPage(Page):
         prev = an.pivot(self.db, pstart, pend)
         months, pmonths = cur.columns, prev.columns
 
-        def tot(rep, idx, cols):
-            return rep.totals[idx].total(cols)
+        def tot(rep, key, cols):
+            return rep.total(key).total(cols)
 
         def neutral(rep, cols):
             return sum(nd.total(cols) for _, k, ns in rep.sections if k == "neutre" for nd in ns)
 
-        self.k_rev.set(tot(cur, 0, months), tot(prev, 0, pmonths), True, T.GREEN)
-        self.k_dep.set(tot(cur, 1, months), tot(prev, 1, pmonths), False)
-        net = tot(cur, 2, months)
-        self.k_net.set(net, tot(prev, 2, pmonths), True, T.GREEN if net >= 0 else T.RED)
+        self.k_rev.set(tot(cur, "rev", months), tot(prev, "rev", pmonths), True, T.GREEN)
+        self.k_rev.extra.setText(f"dont travail {fmt_eur(tot(cur, 'work', months))} · "
+                                 f"autres {fmt_eur(tot(cur, 'other', months))}")
+        self.k_rev.extra.show()
+        self.k_dep.set(tot(cur, "dep", months), tot(prev, "dep", pmonths), False)
+        net = tot(cur, "net", months)
+        self.k_net.set(net, tot(prev, "net", pmonths), True, T.GREEN if net >= 0 else T.RED)
         self.k_sav.set(neutral(cur, months), neutral(prev, pmonths), True)
 
         counts = self.db.count_by_status()
@@ -212,7 +219,12 @@ class DashboardPage(Page):
         ax = fig.add_subplot(111)
         x = list(range(len(data)))
         w = 0.36
-        ax.bar([i - w / 2 for i in x], [r / 100 for _, r, _ in data], w, color="#32D583", label="Revenus")
+        rep12 = an.pivot(self.db, s, e)
+        work = [rep12.total("work").values.get(m, 0) / 100 for m, _, _ in data]
+        other = [rep12.total("other").values.get(m, 0) / 100 for m, _, _ in data]
+        ax.bar([i - w / 2 for i in x], work, w, color="#32D583", label="Revenus du travail")
+        if any(other):
+            ax.bar([i - w / 2 for i in x], other, w, bottom=work, color="#A6F4C5", label="Autres revenus")
         ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")
         ax.plot(x, [(r - d) / 100 for _, r, d in data], color=T.TEXT, marker="o", markersize=3.5, linewidth=1.4,
                 label="Revenus − dépenses")
@@ -220,7 +232,7 @@ class DashboardPage(Page):
         ax.set_xticks(x, [an.month_label(m).split()[0].capitalize() for m, _, _ in data])
         top = max([r / 100 for _, r, _ in data] + [d / 100 for _, _, d in data] + [1])
         ax.set_ylim(top=top * 1.22)
-        ax.legend(loc="upper left", ncol=3, fontsize=8)
+        ax.legend(loc="upper left", ncol=4, fontsize=7.5)
         euro_axis(ax)
         self.canvas.draw_idle()
 

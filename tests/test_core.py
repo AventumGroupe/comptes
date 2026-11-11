@@ -203,11 +203,12 @@ def test_analytics(db):
     rep = analytics.pivot(db, "2026-09", "2026-10")
     assert rep.columns == ["2026-09", "2026-10"]
     titles = [s[0] for s in rep.sections]
-    assert titles == ["Revenus", "Dépenses", "À classer"]
+    assert titles == ["Revenus du travail", "Dépenses", "À classer"]
     courses = next(n for n in rep.sections[1][2] if n.label == "Courses")
     assert courses.values == {"2026-09": 5420, "2026-10": 6100}
-    rev, dep, net, var = rep.totals
+    rev, dep, var = rep.total("rev"), rep.total("dep"), rep.total("var")
     assert rev.values["2026-09"] == 250000 and dep.values["2026-09"] == 5420 + 8990
+    assert rep.total("work").values["2026-09"] == 250000 and not any(rep.total("other").values.values())
     assert var.values["2026-10"] == -6100 - 2400
 
     cmp = analytics.compare(db, ("2026-10", "2026-10"), ("2026-09", "2026-09"))
@@ -224,7 +225,7 @@ def test_analytics(db):
     sante = next(n for n in p.sections[1][2] if n.label == "Santé")
     assert sante.plan == {"2026-10": 1000}
     assert {n.label for n in p.sections[1][2]} == {"Courses", "Santé", "Énergie"}
-    rev, dep, neu, solde = p.totals
+    rev, dep, solde = p.total("rev"), p.total("dep"), p.total("solde")
     assert rev.plan["2026-09"] == 240000 and dep.plan["2026-09"] == 6000
     assert solde.plan["2026-09"] == 234000
     avg = db.monthly_average("2026-09", "2026-10")
@@ -245,7 +246,7 @@ def test_migration_v1_budgets(tmp_path):
     d2 = Database.open(path, "pw")
     fc = d2.forecasts("2026-01", "2026-12")
     assert fc[sup] == {f"2026-{m:02d}": 45000 for m in range(1, 13)}
-    assert d2.get_meta("schema_version") == "2"
+    assert d2.get_meta("schema_version") == "3"
 
 
 def test_months():
@@ -267,3 +268,44 @@ def test_empty_categories(db):
     remaining = {c.name for c in db.categories().values()}
     assert remaining == {"Énergie", "Électricité"}
     assert len(db.operations()) == 6
+
+
+def test_other_income_separated(db):
+    db.import_operations(sample_ops() + [ParsedOperation("2026-10-12", "VIR CPAM REMBOURSEMENT SOINS", 2300)])
+    db.save_rule("ACME", cat(db, "Salaires"))
+    db.save_rule("CPAM", cat(db, "Remboursements santé (CPAM, mutuelle)"))
+    rep = analytics.pivot(db, "2026-09", "2026-10")
+    assert [s[0] for s in rep.sections][:2] == ["Revenus du travail", "Autres revenus"]
+    assert rep.total("work").values == {"2026-09": 250000}
+    assert rep.total("other").values == {"2026-10": 2300}
+    assert rep.total("rev").values == {"2026-09": 250000, "2026-10": 2300}
+    assert analytics.favorable_gap("revenu_autre", 1000, 2300) == 1300
+
+
+def test_migration_v3_split_revenues(tmp_path):
+    path = str(tmp_path / "v2.mcpt")
+    d = Database.create(path, "pw", seed=False)
+    c = d.conn
+    rid = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES ('Revenus', NULL, 'revenu')").lastrowid
+    ids = {}
+    for name in ("Salaires", "Rémunération gérant", "CPAM", "Mutuelle", "Remboursements frais",
+                 "Pensions & retraites", "Autres revenus"):
+        ids[name] = c.execute("INSERT INTO categories(name, parent_id, kind) VALUES (?, ?, 'revenu')",
+                              (name, rid)).lastrowid
+    c.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+    d.import_operations([ParsedOperation("2026-01-05", "VIR CPAM", 1500)])
+    op = d.operations()[0]["id"]
+    d.classify([op], ids["CPAM"])
+    d.close()
+
+    d2 = Database.open(path, "pw")
+    cats = d2.categories()
+    assert cats[rid].name == "Revenus du travail" and cats[rid].kind == "revenu"
+    assert cats[ids["Salaires"]].parent_id == rid and cats[ids["Rémunération gérant"]].parent_id == rid
+    other = cats[ids["CPAM"]].parent_id
+    assert cats[other].name == "Autres revenus" and cats[other].kind == "revenu_autre"
+    for name in ("Mutuelle", "Remboursements frais", "Pensions & retraites"):
+        assert cats[ids[name]].parent_id == other and cats[ids[name]].kind == "revenu_autre"
+    assert cats[ids["Autres revenus"]].name == "Revenus divers"
+    assert d2.operation(op)["category_id"] == ids["CPAM"]
+    assert d2.get_meta("schema_version") == "3"
