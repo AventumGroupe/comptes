@@ -128,8 +128,14 @@ class DashboardPage(Page):
         self.row = row
         chart_card = Card()
         self.chart_card = chart_card
-        chart_card.add(label("Évolution sur 12 mois", "sectionTitle"))
+        ch = QHBoxLayout()
+        ch.addWidget(label("Évolution sur 12 mois", "sectionTitle"))
+        ch.addStretch()
+        ch.addWidget(label("Cliquez sur une barre pour le détail", "muted"))
+        chart_card.add(ch)
         self.canvas = ChartCanvas(chart_card, height=3.2)
+        from .breakdown import ChartClicks
+        self.clicks = ChartClicks(self.canvas, db, self, self._after_change)
         chart_card.add(self.canvas, 1)
         row.addWidget(chart_card, 3)
         top_card = Card()
@@ -161,6 +167,10 @@ class DashboardPage(Page):
         self.add(last_card, 2)
 
         self.period.changed.connect(self.reload)
+
+    def _after_change(self):
+        self.reload()
+        self.changed.emit()
 
     # ------------------------------------------------------------ adaptatif
     def _place_kpis(self, cols):
@@ -246,10 +256,20 @@ class DashboardPage(Page):
         rep12 = an.pivot(self.db, s, e)
         work = [rep12.total("work").values.get(m, 0) / 100 for m, _, _ in data]
         other = [rep12.total("other").values.get(m, 0) / 100 for m, _, _ in data]
-        ax.bar([i - w / 2 for i in x], work, w, color="#32D583", label="Travail et substitution")
-        if any(other):
-            ax.bar([i - w / 2 for i in x], other, w, bottom=work, color="#A6F4C5", label="Autres revenus")
-        ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")
+        wb = ax.bar([i - w / 2 for i in x], work, w, color="#32D583", label="Travail et substitution")
+        ob = ax.bar([i - w / 2 for i in x], other, w, bottom=work, color="#A6F4C5",
+                    label="Autres revenus" if any(other) else "_nolegend_")
+        db_ = ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")
+        self.clicks.clear()
+        cats = self.db.categories().values()
+        ids = {k: [c.id for c in cats if c.kind == k] for k in ("revenu", "revenu_autre", "depense")}
+        for (m, _r, dv), r1, r_o, r2, vw, vo in zip(data, wb, ob, db_, work, other):
+            ml = an.month_label(m, full=True)
+            self.clicks.register(r1, f"Revenus du travail et de substitution — {ml}", ids["revenu"], m, m,
+                                 round(vw * 100))
+            if vo:
+                self.clicks.register(r_o, f"Autres revenus — {ml}", ids["revenu_autre"], m, m, round(vo * 100))
+            self.clicks.register(r2, f"Dépenses — {ml}", ids["depense"], m, m, dv)
         ax.plot(x, [(r - d) / 100 for _, r, d in data], color=T.TEXT, marker="o", markersize=3.5, linewidth=1.4,
                 label="Revenus − dépenses")
         ax.axhline(0, color=T.BORDER_STRONG, linewidth=0.8)

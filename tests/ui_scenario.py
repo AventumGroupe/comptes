@@ -100,8 +100,24 @@ def run(tmp_path):
         win.charts_tab.kind.setCurrentIndex(k)
         app.processEvents()
         assert win.charts_tab._targets, k
-        title, cat_ids, s_, e_ = next(iter(win.charts_tab._targets.values()))
-        assert cat_ids and s_ <= e_
+        title, cat_ids, s_, e_, amount = next(iter(win.charts_tab._targets.values()))
+        assert cat_ids and s_ <= e_ and amount is not None
+
+    # Fenêtre de détail : répartition par catégorie + opérations, filtrables
+    from mescomptes.ui.breakdown import BreakdownDialog
+    dep_ids = [c.id for c in db.categories().values() if c.kind == "depense"]
+    bd = BreakdownDialog(db, "Dépenses — test", dep_ids, "2026-01", "2026-10")
+    assert bd.tree.topLevelItemCount() > 0
+    first = bd.tree.topLevelItem(0)
+    n_all = len(bd.panel.view.model_.rows)
+    bd.tree.setCurrentItem(first)
+    assert 0 < len(bd.panel.view.model_.rows) <= n_all
+    assert "€" in bd.total_label.text()
+    db.save_rule("ACME", cat("Salaires"))
+    rev_ids = [c.id for c in db.categories().values() if c.kind in ("revenu", "revenu_autre")]
+    bd2 = BreakdownDialog(db, "Revenus", rev_ids, "2026-01", "2026-10")
+    assert bd2.tree.topLevelItemCount() >= 1
+    assert win.dashboard.clicks.targets
 
     # Prévisionnel : saisie avec recopie automatique sur les mois suivants
     fp = win.forecast_tab
