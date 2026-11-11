@@ -12,7 +12,7 @@ from . import store
 from .normalize import extract_vendor, key_matches, label_key
 from .seed import seed_categories
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
@@ -51,11 +51,21 @@ CREATE TABLE operations(
 );
 CREATE INDEX idx_ops_date ON operations(date);
 CREATE INDEX idx_ops_cat ON operations(category_id);
-CREATE TABLE budgets(
+CREATE TABLE forecast(
     category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
-    year INTEGER NOT NULL,
-    monthly INTEGER NOT NULL,
-    PRIMARY KEY(category_id, year)
+    month TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    PRIMARY KEY(category_id, month)
+);
+"""
+
+# Migration 1 -> 2 : budget mensuel par année -> prévisionnel mois par mois
+MIGRATION_2 = """
+CREATE TABLE IF NOT EXISTS forecast(
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    month TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    PRIMARY KEY(category_id, month)
 );
 """
 
@@ -133,7 +143,24 @@ class Database:
         conn.execute("PRAGMA foreign_keys=ON")
         db = cls(path, key, salt, conn)
         db._backup()
+        db._migrate()
         return db
+
+    def _migrate(self):
+        version = int(self.get_meta("schema_version", "1"))
+        if version < 2:
+            self.conn.executescript(MIGRATION_2)
+            has_budgets = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='budgets'").fetchone()
+            if has_budgets:
+                for cat_id, year, monthly in self.conn.execute(
+                        "SELECT category_id, year, monthly FROM budgets").fetchall():
+                    for m in range(1, 13):
+                        self.conn.execute("INSERT OR REPLACE INTO forecast VALUES (?,?,?)",
+                                          (cat_id, f"{year:04d}-{m:02d}", monthly))
+                self.conn.execute("DROP TABLE budgets")
+            self.conn.execute("INSERT OR REPLACE INTO meta VALUES('schema_version', '2')")
+            self.save()
 
     def save(self):
         self.conn.commit()
@@ -288,7 +315,7 @@ class Database:
         used = {r[0] for r in self.conn.execute("SELECT DISTINCT category_id FROM operations "
                                                 "WHERE category_id IS NOT NULL")}
         rules = dict(self.conn.execute("SELECT category_id, COUNT(*) FROM rules GROUP BY category_id").fetchall())
-        budgets = {r[0] for r in self.conn.execute("SELECT DISTINCT category_id FROM budgets")}
+        budgets = {r[0] for r in self.conn.execute("SELECT DISTINCT category_id FROM forecast")}
         out = []
         for top, subs in self.category_tree():
             empty_subs = [s for s in subs if s.id not in used]
@@ -520,23 +547,41 @@ class Database:
                     pending += 1
         return total, pending
 
-    # ------------------------------------------------------------------ budgets
-    def budgets(self, year):
-        rows = self.conn.execute("SELECT category_id, monthly FROM budgets WHERE year=?", (year,)).fetchall()
-        return {r[0]: r[1] for r in rows}
+    # ------------------------------------------------------------- prévisionnel
+    def forecasts(self, start_month, end_month):
+        """{catégorie: {mois: centimes}} sur la période (montants positifs)."""
+        out = {}
+        for cat, month, amount in self.conn.execute(
+                "SELECT category_id, month, amount FROM forecast WHERE month >= ? AND month <= ?",
+                (start_month, end_month)):
+            out.setdefault(cat, {})[month] = amount
+        return out
 
-    def set_budget(self, category_id, year, monthly_cents):
-        if monthly_cents is None:
-            self.conn.execute("DELETE FROM budgets WHERE category_id=? AND year=?", (category_id, year))
-        else:
-            self.conn.execute("INSERT OR REPLACE INTO budgets VALUES (?,?,?)", (category_id, year, monthly_cents))
+    def set_forecasts(self, entries):
+        """entries : [(catégorie, mois, centimes ou None)] ; None efface la valeur."""
+        for cat, month, cents in entries:
+            if cents is None:
+                self.conn.execute("DELETE FROM forecast WHERE category_id=? AND month=?", (cat, month))
+            else:
+                self.conn.execute("INSERT OR REPLACE INTO forecast VALUES (?,?,?)", (cat, month, int(cents)))
         self.save()
 
-    def copy_budgets(self, from_year, to_year):
-        self.conn.execute("DELETE FROM budgets WHERE year=?", (to_year,))
-        self.conn.execute("INSERT INTO budgets SELECT category_id, ?, monthly FROM budgets WHERE year=?",
-                          (to_year, from_year))
-        self.save()
+    def set_forecast(self, cat, month, cents):
+        self.set_forecasts([(cat, month, cents)])
 
-    def budget_years(self):
-        return [r[0] for r in self.conn.execute("SELECT DISTINCT year FROM budgets ORDER BY year")]
+    def monthly_average(self, start_month, end_month):
+        """Moyenne mensuelle réalisée par catégorie (montant présenté, positif pour dépenses/revenus)."""
+        from .analytics import month_first_day, month_last_day, month_range
+        n = len(month_range(start_month, end_month))
+        cats = self.categories()
+        out = {}
+        for cat, total in self.conn.execute(
+                "SELECT category_id, SUM(amount) FROM operations WHERE category_id IS NOT NULL "
+                "AND date >= ? AND date <= ? GROUP BY category_id",
+                (month_first_day(start_month), month_last_day(end_month))):
+            c = cats.get(cat)
+            if c is None:
+                continue
+            sign = 1 if c.kind == "revenu" else -1
+            out[cat] = round(sign * total / n)
+        return out

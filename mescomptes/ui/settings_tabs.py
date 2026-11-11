@@ -56,7 +56,7 @@ class CleanupDialog(QDialog):
                             "supprimée sont supprimées aussi ; aucune opération n'est touchée.", "muted", True))
         self.tree = QTreeWidget()
         style_tree(self.tree)
-        self.tree.setHeaderLabels(["CATÉGORIE", "RÈGLES", "BUDGET"])
+        self.tree.setHeaderLabels(["CATÉGORIE", "RÈGLES", "PRÉVISIONNEL"])
         self.tree.setRootIsDecorated(False)
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)

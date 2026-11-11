@@ -19,7 +19,8 @@ from .common import Card, button, error, info, label, save_path
 from .dashboard import DashboardPage
 from .dialogs import ImportDialog, PasswordDialog
 from .operations_tab import OperationsTab
-from .report_tabs import BudgetTab, CompareTab, SummaryTab
+from .budget_tabs import ForecastPage, PlanActualPage
+from .report_tabs import CompareTab, SummaryTab
 from .settings_tabs import CategoriesTab, RulesTab
 
 
@@ -231,7 +232,9 @@ class MainWindow(QMainWindow):
         ("compare", "Comparaison"),
         ("pie", "Détail par catégorie"),
         ("chart", "Graphiques"),
-        ("target", "Budget"),
+        (None, "BUDGET"),
+        ("target", "Prévisionnel"),
+        ("scale", "Prévu / réalisé"),
         (None, "PARAMÈTRES"),
         ("tag", "Catégories"),
         ("wand", "Règles"),
@@ -251,11 +254,12 @@ class MainWindow(QMainWindow):
         self.compare_tab = CompareTab(db)
         self.detail_tab = DetailTab(db)
         self.charts_tab = ChartsTab(db)
-        self.budget_tab = BudgetTab(db)
+        self.forecast_tab = ForecastPage(db)
+        self.plan_tab = PlanActualPage(db)
         self.cat_tab = CategoriesTab(db)
         self.rules_tab = RulesTab(db)
         self.pages = [self.dashboard, self.ops_tab, self.summary_tab, self.compare_tab, self.detail_tab,
-                      self.charts_tab, self.budget_tab, self.cat_tab, self.rules_tab]
+                      self.charts_tab, self.forecast_tab, self.plan_tab, self.cat_tab, self.rules_tab]
         self.stack = QStackedWidget()
         for p in self.pages:
             self.stack.addWidget(p)
@@ -387,7 +391,7 @@ class MainWindow(QMainWindow):
             "<li>Les opérations classées automatiquement sont « À vérifier » : validez-les ou corrigez-les "
             "(exception ponctuelle ou modification de la règle, au choix).</li>"
             "<li>Analysez : tableau de bord, synthèse mensuelle, comparaisons, détail par catégorie, graphiques, "
-            "budget. Exports Excel et PDF.</li>"
+            "prévisionnel mois par mois et suivi prévu / réalisé. Exports Excel et PDF.</li>"
             "</ol>"))
 
     # ------------------------------------------------------------- navigation

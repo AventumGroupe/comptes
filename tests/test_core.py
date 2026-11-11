@@ -214,15 +214,38 @@ def test_analytics(db):
     courses = next(n for n in cmp.sections[1][2] if n.label == "Courses")
     assert courses.values == {"A": 6100, "B": 5420}
 
-    db.set_budget(cat(db, "Supermarché"), 2026, 6000)
-    db.set_budget(cat(db, "Pharmacie"), 2026, 1000)
-    b = analytics.budget_report(db, "2026-09", "2026-10")
-    courses = next(n for n in b.sections[1][2] if n.label == "Courses")
-    assert courses.values["budget"] == 12000 and courses.values["reel"] == 11520
-    sante = next(n for n in b.sections[1][2] if n.label == "Santé")
-    assert sante.values["budget"] == 2000
-    db.copy_budgets(2026, 2027)
-    assert db.budgets(2027) == db.budgets(2026)
+    db.set_forecasts([(cat(db, "Supermarché"), m, 6000) for m in ("2026-09", "2026-10")] +
+                     [(cat(db, "Pharmacie"), "2026-10", 1000), (cat(db, "Salaires"), "2026-09", 240000)])
+    p = analytics.plan_vs_actual(db, "2026-09", "2026-10")
+    courses = next(n for n in p.sections[1][2] if n.label == "Courses")
+    assert courses.plan == {"2026-09": 6000, "2026-10": 6000}
+    assert courses.values["2026-09"] == 5420 and courses.values["2026-10"] == 6100
+    assert analytics.favorable_gap("depense", 6000, 6100) == -100
+    sante = next(n for n in p.sections[1][2] if n.label == "Santé")
+    assert sante.plan == {"2026-10": 1000}
+    assert {n.label for n in p.sections[1][2]} == {"Courses", "Santé", "Énergie"}
+    rev, dep, neu, solde = p.totals
+    assert rev.plan["2026-09"] == 240000 and dep.plan["2026-09"] == 6000
+    assert solde.plan["2026-09"] == 234000
+    avg = db.monthly_average("2026-09", "2026-10")
+    assert avg[cat(db, "Supermarché")] == (5420 + 6100) // 2
+
+
+def test_migration_v1_budgets(tmp_path):
+    path = str(tmp_path / "old.mcpt")
+    d = Database.create(path, "pw")
+    sup = cat(d, "Supermarché")
+    # simule un dossier en version 1 avec l'ancienne table des budgets
+    d.conn.execute("DROP TABLE forecast")
+    d.conn.execute("CREATE TABLE budgets(category_id INTEGER, year INTEGER, monthly INTEGER, "
+                   "PRIMARY KEY(category_id, year))")
+    d.conn.execute("INSERT INTO budgets VALUES (?, 2026, 45000)", (sup,))
+    d.conn.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+    d.close()
+    d2 = Database.open(path, "pw")
+    fc = d2.forecasts("2026-01", "2026-12")
+    assert fc[sup] == {f"2026-{m:02d}": 45000 for m in range(1, 13)}
+    assert d2.get_meta("schema_version") == "2"
 
 
 def test_months():

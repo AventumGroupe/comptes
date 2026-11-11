@@ -85,6 +85,21 @@ class DetailTab(Page):
         self.cat.currentIndexChanged.connect(self.reload)
         self.period.changed.connect(self.reload)
         self.data = None
+        self._bars = {}
+        self.canvas.mpl_connect("pick_event", self._on_pick)
+        self.canvas.mpl_connect("motion_notify_event", lambda e: self.canvas.setCursor(
+            Qt.PointingHandCursor if any(b.contains(e)[0] for b in self._bars) else Qt.ArrowCursor))
+
+    def _on_pick(self, event):
+        m = self._bars.get(event.artist)
+        cat_ids, name, _kind = self._cat_ids()
+        if m is None or cat_ids is None:
+            return
+        from .report_tabs import OperationsDialog
+        dlg = OperationsDialog(self.db, name, cat_ids, m, m, self)
+        dlg.exec()
+        if dlg.dirty:
+            self._ops_changed()
 
     def show_category(self, cat_id):
         self.cat.set_value(cat_id)
@@ -130,14 +145,18 @@ class DetailTab(Page):
             self.k_total.delta.setText(self.k_total.delta.text() +
                                        f"<br><span style='color:{T.SUBTLE}'>N-1 : {covered} mois de données "
                                        f"sur {len(months)}</span>")
-        self.chart_title.setText(f"{name} — par mois")
+        self.chart_title.setText(f"{name} — par mois (cliquez sur un mois pour voir ses opérations)")
 
         fig = self.canvas.figure
         fig.clear()
         ax = fig.add_subplot(111)
         x = list(range(len(months)))
         color = T.category_color(self.db, cat_ids[0]).name() if cat_ids != [None] else T.ORANGE
-        ax.bar(x, [sums.get(m, 0) / 100 for m in months], color=color, width=0.6, label="Période")
+        bars = ax.bar(x, [sums.get(m, 0) / 100 for m in months], color=color, width=0.6, label="Période")
+        self._bars = {}
+        for m, rect in zip(months, bars):
+            rect.set_picker(True)
+            self._bars[rect] = m
         if has_prev:
             ax.plot(x, [prev[an.add_months(m, -12)] / 100 if an.add_months(m, -12) in prev else float("nan")
                         for m in months], color=T.TEXT, marker="o", markersize=3.5, linestyle="--",
@@ -190,6 +209,7 @@ class DetailTab(Page):
 
 # ================================================================= Graphiques
 class ChartsTab(Page):
+    changed = Signal()
     CHARTS = ["Revenus et dépenses par mois", "Répartition des dépenses", "Évolution des dépenses par catégorie",
               "Solde du compte en fin de mois"]
 
@@ -209,11 +229,43 @@ class ChartsTab(Page):
         bar.addStretch()
         self.add(bar)
         card = Card(margins=(18, 16, 18, 16))
+        self.hint = label("Cliquez sur une catégorie, une barre ou une entrée de la légende pour voir les "
+                          "opérations correspondantes.", "muted")
+        card.add(self.hint)
         self.canvas = ChartCanvas(card, height=5)
         card.add(self.canvas, 1)
         self.add(card, 1)
         self.kind.currentIndexChanged.connect(self.reload)
         self.period.changed.connect(self.reload)
+        self._targets = {}
+        self._last_click = None
+        self.canvas.mpl_connect("pick_event", self._on_pick)
+        self.canvas.mpl_connect("motion_notify_event", self._on_move)
+
+    # ------------------------------------------------------------- clics
+    def _register(self, artist, title, cat_ids, start, end):
+        artist.set_picker(True)
+        self._targets[artist] = (title, cat_ids, start, end)
+
+    def _on_move(self, event):
+        hit = any(a.contains(event)[0] for a in self._targets if a.figure is not None)
+        self.canvas.setCursor(Qt.PointingHandCursor if hit else Qt.ArrowCursor)
+
+    def _on_pick(self, event):
+        target = self._targets.get(event.artist)
+        if target is None or self._last_click is event.mouseevent:
+            return
+        self._last_click = event.mouseevent
+        from .report_tabs import OperationsDialog
+        title, cat_ids, start, end = target
+        dlg = OperationsDialog(self.db, title, cat_ids, start, end, self)
+        dlg.exec()
+        if dlg.dirty:
+            self.reload()
+            self.changed.emit()
+
+    def _kind_ids(self, kind):
+        return [c.id for c in self.db.categories().values() if c.kind == kind]
 
     def refresh(self):
         self.period.set_bounds(*self.db.date_bounds())
@@ -223,17 +275,23 @@ class ChartsTab(Page):
         start, end = self.period.period()
         fig = self.canvas.figure
         fig.clear()
+        self._targets = {}
         ax = fig.add_subplot(111)
         k = self.kind.currentIndex()
         months = an.month_range(start, end)
         labels = [an.month_label(m) for m in months]
+        self.hint.setVisible(k != 3)
         x = list(range(len(months)))
         rot = dict(rotation=45, ha="right") if len(months) > 8 else {}
         if k == 0:
             data = an.monthly_totals(self.db, start, end)
             w = 0.38
-            ax.bar([i - w / 2 for i in x], [r / 100 for _, r, _ in data], w, color="#32D583", label="Revenus")
-            ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")
+            rb = ax.bar([i - w / 2 for i in x], [r / 100 for _, r, _ in data], w, color="#32D583", label="Revenus")
+            db_ = ax.bar([i + w / 2 for i in x], [d / 100 for _, _, d in data], w, color=T.ACCENT, label="Dépenses")
+            rev_ids, dep_ids = self._kind_ids("revenu"), self._kind_ids("depense")
+            for m, r1, r2 in zip(months, rb, db_):
+                self._register(r1, f"Revenus — {an.month_label(m, full=True)}", rev_ids, m, m)
+                self._register(r2, f"Dépenses — {an.month_label(m, full=True)}", dep_ids, m, m)
             ax.plot(x, [(r - d) / 100 for _, r, d in data], color=T.TEXT, marker="o", markersize=4,
                     label="Revenus − dépenses")
             ax.axhline(0, color=T.BORDER_STRONG, linewidth=0.8)
@@ -245,17 +303,23 @@ class ChartsTab(Page):
         elif k == 1:
             rep = an.pivot(self.db, start, end)
             nodes = [n for _, kind, ns in rep.sections if kind == "depense" for n in ns]
-            vals = sorted(((n.label, n.total(months), n.cat_id) for n in nodes if n.total(months) > 0),
-                          key=lambda v: -v[1])
+            ranked = sorted((n for n in nodes if n.total(months) > 0), key=lambda n: -n.total(months))
+            vals = [(n.label, n.total(months), n.cat_id) for n in ranked]
+            ids = [n.cat_ids for n in ranked]
             if len(vals) > 10:
                 vals = vals[:9] + [("Autres", sum(v for _, v, _ in vals[9:]), None)]
+                ids = ids[:9] + [[c for n in ranked[9:] for c in n.cat_ids]]
             total = sum(v for _, v, _ in vals)
             if total:
                 colors = [T.category_color(self.db, c).name() if c else T.SUBTLE for _, _, c in vals]
                 wedges, _ = ax.pie([v for _, v, _ in vals], colors=colors, startangle=90, counterclock=False,
                                    wedgeprops=dict(width=0.38, edgecolor="white", linewidth=2))
-                ax.legend(wedges, [f"{lbl} — {fmt_eur(v)} ({v / total * 100:.0f} %)" for lbl, v, _ in vals],
-                          loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
+                leg = ax.legend(wedges, [f"{lbl} — {fmt_eur(v)} ({v / total * 100:.0f} %)" for lbl, v, _ in vals],
+                                loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
+                for wedge, patch, text, (lbl, _v, _c), cids in zip(wedges, leg.get_patches(), leg.get_texts(),
+                                                                    vals, ids):
+                    for artist in (wedge, patch, text):
+                        self._register(artist, lbl, cids, start, end)
                 ax.text(0, 0.06, fmt_eur(total), ha="center", va="center", fontsize=13, weight="bold", color=T.TEXT)
                 ax.text(0, -0.12, "de dépenses", ha="center", va="center", fontsize=9, color=T.MUTED)
                 ax.set_aspect("equal")
@@ -269,15 +333,22 @@ class ChartsTab(Page):
             nodes.sort(key=lambda n: -n.total(months))
             main, rest = nodes[:8], nodes[8:]
             bottom = [0] * len(months)
-            series = [(n.label, [n.values.get(m, 0) / 100 for m in months], T.category_color(self.db, n.cat_id).name())
-                      for n in main]
+            series = [(n.label, [n.values.get(m, 0) / 100 for m in months], T.category_color(self.db, n.cat_id).name(),
+                       n.cat_ids) for n in main]
             if rest:
-                series.append(("Autres", [sum(n.values.get(m, 0) for n in rest) / 100 for m in months], T.SUBTLE))
-            for lbl, vals, col in series:
-                ax.bar(x, vals, bottom=bottom, color=col, label=lbl, width=0.65, edgecolor="white", linewidth=0.6)
+                series.append(("Autres", [sum(n.values.get(m, 0) for n in rest) / 100 for m in months], T.SUBTLE,
+                               [c for n in rest for c in n.cat_ids]))
+            for lbl, vals, col, cids in series:
+                bars = ax.bar(x, vals, bottom=bottom, color=col, label=lbl, width=0.65, edgecolor="white",
+                              linewidth=0.6)
+                for m, rect in zip(months, bars):
+                    self._register(rect, f"{lbl} — {an.month_label(m, full=True)}", cids, m, m)
                 bottom = [b + v for b, v in zip(bottom, vals)]
             ax.set_xticks(x, labels, fontsize=8, **rot)
-            ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
+            leg = ax.legend(loc="center left", bbox_to_anchor=(1, 0.5), fontsize=9)
+            for patch, text, (lbl, _v, _c, cids) in zip(leg.get_patches(), leg.get_texts(), series):
+                self._register(patch, lbl, cids, start, end)
+                self._register(text, lbl, cids, start, end)
             euro_axis(ax)
         else:
             series = an.account_balance_series(self.db, start, end)

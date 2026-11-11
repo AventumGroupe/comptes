@@ -1,4 +1,4 @@
-"""Calculs d'analyse : tableaux croisés catégories × mois, comparaisons, budgets.
+"""Calculs d'analyse : tableaux croisés catégories × mois, comparaisons, prévisionnel.
 
 Convention d'affichage (« montant présenté ») :
 - catégories de dépenses : montant dépensé en positif (un remboursement le diminue) ;
@@ -187,41 +187,85 @@ def compare(db, period_a, period_b):
     return build_report(db, raw, ["A", "B"])
 
 
-def budget_report(db, start_month, end_month):
-    """Budget vs réalisé sur la période. Colonnes 'budget' et 'reel'.
-    Le budget d'une catégorie principale sans budget propre est la somme de ses sous-catégories."""
-    months = month_range(start_month, end_month)
-    budgets_by_year = {y: db.budgets(y) for y in {int(m[:4]) for m in months}}
-    real = raw_sums(db, start_month, end_month, by_month=False)
-    raw = {cat: {"reel": v} for cat, v in real.items()}
-    report = build_report(db, raw, ["budget", "reel"], include_empty=True)
+def plan_vs_actual(db, start_month, end_month):
+    """Prévisionnel et réalisé par catégorie et par mois.
 
-    def budget_for(cat_id):
-        return sum(budgets_by_year[int(m[:4])].get(cat_id, 0) for m in months)
+    node.values[mois] = réalisé présenté ; node.plan[mois] = prévu.
+    Pour les mouvements internes (épargne…), le montant présenté est la somme sortie du compte,
+    comparable à un objectif d'épargne saisi en positif. Le prévu d'une catégorie principale est,
+    pour chaque mois, sa propre valeur si elle est saisie, sinon la somme de ses sous-catégories."""
+    months = month_range(start_month, end_month)
+    cats = db.categories()
+    raw = raw_sums(db, start_month, end_month)
+    for cat, vals in raw.items():
+        if cat is not None and cats.get(cat) and cats[cat].kind == "neutre":
+            raw[cat] = {m: -v for m, v in vals.items()}
+    report = build_report(db, raw, months, include_empty=True)
+    fc = db.forecasts(start_month, end_month)
 
     for _, kind, nodes in report.sections:
-        if kind == "none":
-            continue
         for node in nodes:
-            child_total = 0
+            node.plan = {}
             for ch in node.children:
-                if ch.cat_id != node.cat_id:
-                    ch.values["budget"] = budget_for(ch.cat_id)
-                    child_total += ch.values["budget"]
+                ch.plan = dict(fc.get(ch.cat_id, {})) if ch.cat_id != node.cat_id else {}
+            own = fc.get(node.cat_id, {})
+            for m in months:
+                if m in own:
+                    node.plan[m] = own[m]
                 else:
-                    ch.values["budget"] = 0
-            own = budget_for(node.cat_id)
-            node.values["budget"] = own if own else child_total
-    # Totaux budget
-    for t in report.totals:
-        t.values.setdefault("budget", 0)
-    rev_b = sum(n.values["budget"] for _, k, ns in report.sections if k == "revenu" for n in ns)
-    dep_b = sum(n.values["budget"] for _, k, ns in report.sections if k == "depense" for n in ns)
-    report.totals[0].values["budget"] = rev_b
-    report.totals[1].values["budget"] = dep_b
-    report.totals[2].values["budget"] = rev_b - dep_b
-    report.totals = report.totals[:3]
+                    s_ = sum(ch.plan.get(m, 0) for ch in node.children)
+                    if s_:
+                        node.plan[m] = s_
+        # on retire les lignes sans prévu ni réalisé
+        kept = []
+        for node in nodes:
+            node.children = [ch for ch in node.children if any(ch.values.values()) or any(ch.plan.values())]
+            if node.children or any(node.values.values()) or any(node.plan.values()):
+                kept.append(node)
+        nodes[:] = kept
+    report.sections = [s_ for s_ in report.sections if s_[2]]
+
+    def total(kind, attr):
+        acc = {}
+        for _, k, nodes in report.sections:
+            if k == kind:
+                for n in nodes:
+                    for m, v in getattr(n, attr).items():
+                        acc[m] = acc.get(m, 0) + v
+        return acc
+
+    rev_r, dep_r, neu_r, unc = (total("revenu", "values"), total("depense", "values"), total("neutre", "values"),
+                                total("none", "values"))
+    rev_p, dep_p, neu_p = total("revenu", "plan"), total("depense", "plan"), total("neutre", "plan")
+
+    def node(label, real, plan):
+        n = Node(label, "total", [], real, level=0)
+        n.plan = plan
+        return n
+
+    def solde(r, d, nn, u=None):
+        u = u or {}
+        return {m: r.get(m, 0) - d.get(m, 0) - nn.get(m, 0) + u.get(m, 0) for m in months}
+
+    report.totals = [
+        node("Total revenus", rev_r, rev_p),
+        node("Total dépenses", dep_r, dep_p),
+        node("Épargne et mouvements internes", neu_r, neu_p),
+        node("Solde (revenus − dépenses − épargne)", solde(rev_r, dep_r, neu_r, unc), solde(rev_p, dep_p, neu_p)),
+    ]
+    for _, _k, nodes in report.sections:
+        for n in nodes:
+            if not hasattr(n, "plan"):
+                n.plan = {}
     return report
+
+
+def favorable_gap(kind, plan, real, label=""):
+    """Écart orienté : positif = favorable (moins dépensé, plus reçu, solde meilleur)."""
+    if kind in ("revenu", "neutre") or label in ("Total revenus", "Épargne et mouvements internes") \
+            or label.startswith("Solde"):
+        return real - plan
+    return plan - real
 
 
 def monthly_totals(db, start_month, end_month):

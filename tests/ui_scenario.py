@@ -12,6 +12,7 @@ sys.path.insert(0, HERE)
 import pathlib  # noqa: E402
 
 from PySide6 import QtWidgets  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
 
 from fake_statement import generate  # noqa: E402
 
@@ -55,7 +56,7 @@ def run(tmp_path):
     assert cd2.group.checkedButton() is None and cd2.r_update is not None
 
     db.save_rule("EDF", cat("Électricité"))
-    db.set_budget(cat("Courses"), 2026, 50000)
+    db.set_forecasts([(cat("Courses"), f"2026-{m:02d}", 50000) for m in range(1, 13)])
 
     win = mw.MainWindow(db, Settings(str(tmp_path / "prefs.json")))
     win.show()
@@ -92,6 +93,58 @@ def run(tmp_path):
     ct.pb.set_period("2025-10", "2025-11")
     assert ct.mode.currentIndex() == ct.FREE and ct.pb.period() == ("2025-10", "2025-11")
     assert "oct. 2025" in ct.headers[2] or "octobre 2025" in ct.headers[2]
+
+    # Graphiques cliquables : chaque part / barre / légende est reliée à des opérations
+    win.show_page(5)
+    for k in (0, 1, 2):
+        win.charts_tab.kind.setCurrentIndex(k)
+        app.processEvents()
+        assert win.charts_tab._targets, k
+        title, cat_ids, s_, e_ = next(iter(win.charts_tab._targets.values()))
+        assert cat_ids and s_ <= e_
+
+    # Prévisionnel : saisie avec recopie automatique sur les mois suivants
+    fp = win.forecast_tab
+    win.show_page(6)
+    fp.start.set_month("2026-01")
+    fp.autocopy.setChecked(True)
+    sup = cat("Supermarché")
+
+    def find(tree, cid):
+        def walk(item):
+            if item.data(0, Qt.UserRole + 30) == cid:
+                return item
+            for i in range(item.childCount()):
+                found = walk(item.child(i))
+                if found is not None:
+                    return found
+            return None
+        for i in range(tree.topLevelItemCount()):
+            found = walk(tree.topLevelItem(i))
+            if found is not None:
+                return found
+
+    find(fp.tree, sup).setText(3, "450")       # mars 2026 -> recopié jusqu'en décembre
+    app.processEvents()
+    fc = db.forecasts("2026-01", "2026-12")[sup]
+    assert "2026-02" not in fc and fc["2026-03"] == 45000 and fc["2026-12"] == 45000
+    fp.autocopy.setChecked(False)
+    find(fp.tree, sup).setText(5, "300")       # mai uniquement
+    app.processEvents()
+    fc = db.forecasts("2026-01", "2026-12")[sup]
+    assert fc["2026-05"] == 30000 and fc["2026-06"] == 45000
+    fp._copy_right(sup, 5)                     # recopie de mai vers la droite
+    assert db.forecasts("2026-06", "2026-12")[sup]["2026-12"] == 30000
+
+    # Prévu / réalisé
+    pp = win.plan_tab
+    win.show_page(7)
+    pp.period.set_period("2026-01", "2026-10")
+    for k in range(pp.mode.count()):
+        pp.mode.setCurrentIndex(k)
+        app.processEvents()
+    courses = next(n for _, kd, ns in pp.report.sections if kd == "depense" for n in ns if n.label == "Courses")
+    assert courses.plan["2026-03"] == 50000  # valeur propre de Courses prioritaire sur ses sous-catégories
 
     # Nettoyage des catégories vides
     from mescomptes.ui.settings_tabs import CleanupDialog

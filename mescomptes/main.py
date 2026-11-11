@@ -1,5 +1,6 @@
 """Point d'entrée de l'application."""
 
+import os
 import sys
 
 
@@ -24,7 +25,12 @@ def main():
         return 0
     win = MainWindow(login.db, settings)
     win.show()
-    return app.exec()
+    code = app.exec()
+    # Les données sont déjà enregistrées (fermeture de la fenêtre). Sortie directe pour éviter
+    # un éventuel plantage de Qt pendant la destruction des objets à la fermeture de Python.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
 
 
 def _resource(rel):

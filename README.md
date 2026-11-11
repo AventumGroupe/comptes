@@ -17,8 +17,9 @@ Application Windows autonome pour classer et analyser les opérations d'un relev
 | Synthèse mensuelle | Tableau catégories × mois, total, moyenne, écarts vs mois précédent (€ ou %) |
 | Comparaison | Mois vs mois précédent, vs même mois N-1, période vs N-1, deux périodes libres |
 | Détail par catégorie | Graphique mensuel avec N-1, principaux fournisseurs, liste des opérations |
-| Graphiques | Revenus/dépenses, répartition, évolution par catégorie, solde du compte |
-| Budget | Budget mensuel par catégorie et par année, suivi budget/réalisé |
+| Graphiques | Revenus/dépenses, répartition, évolution par catégorie, solde du compte — clic sur une catégorie ou une barre pour voir les opérations |
+| Prévisionnel | Saisie mois par mois sur 12 à 24 mois, recopie sur les mois suivants, pré-remplissage depuis le réalisé |
+| Prévu / réalisé | Écarts par catégorie : synthèse de la période, écarts mois par mois, réalisé / prévu mois par mois |
 | Catégories | Deux niveaux, type (revenu, dépense, mouvement interne), ajout, renommage, déplacement, suppression, nettoyage des catégories vides |
 | Règles | Règles apprises « le libellé contient… → catégorie », modifiables, testables |
 
