@@ -1,7 +1,7 @@
 """Pages « Prévisionnel » (saisie mois par mois) et « Prévu / réalisé » (écarts)."""
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QFont
+from PySide6.QtGui import QBrush, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QMenu,
                                QStyledItemDelegate, QTreeWidget)
 
@@ -42,7 +42,7 @@ class ForecastPage(Page):
 
     def __init__(self, db, parent=None):
         super().__init__("Prévisionnel", "Saisissez vos montants prévus mois par mois (double-clic ou frappe directe "
-                                         "dans une cellule). Clic droit pour recopier une valeur sur les mois suivants.",
+                                         "dans une cellule). Recopiez n'importe quel mois vers la droite, puis ajustez les mois suivants.",
                          parent)
         self.db = db
         export_buttons(self, lambda: self.export("excel"), lambda: self.export("pdf"))
@@ -70,6 +70,9 @@ class ForecastPage(Page):
 
         row2 = FlowLayout()
         row2.setSpacing(8)
+        self.copy_btn = button("Recopier vers la droite", "compare", "primary", slot=self.copy_selection_right,
+                               tooltip="Reporte la ou les cellules sélectionnées sur tous les mois suivants (Ctrl+R)")
+        row2.addWidget(self.copy_btn)
         row2.addWidget(button("Recopier la 1ʳᵉ colonne sur tous les mois", "compare", slot=self.copy_first_column,
                               tooltip="Chaque montant du premier mois est reporté sur les mois suivants"))
         row2.addWidget(button("Pré-remplir avec le réalisé moyen", "sparkle", slot=self.prefill,
@@ -77,6 +80,11 @@ class ForecastPage(Page):
         row2.addStretch()
         row2.addWidget(button("Tout effacer", "trash", "danger", slot=self.clear_all))
         self.add(row2)
+        self.sel_hint = label("Cliquez sur une cellule (n'importe quel mois), puis « Recopier vers la droite » ou "
+                              "Ctrl+R. Vous pourrez ensuite modifier un mois suivant et recopier à nouveau à partir "
+                              "de lui en cas d'évolution.", "muted", True)
+        self.sel_hint.setTextFormat(Qt.RichText)
+        self.add(self.sel_hint)
 
         card = Card(margins=(0, 4, 0, 4))
         self.tree = QTreeWidget()
@@ -85,6 +93,7 @@ class ForecastPage(Page):
         self.tree.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed |
                                   QAbstractItemView.AnyKeyPressed)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.header().setStretchLastSection(False)
         self.tree.itemChanged.connect(self._item_changed)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -95,6 +104,9 @@ class ForecastPage(Page):
         self.months = []
         self._filling = False
         self._expanded = {}
+        self._restore = None   # (catégorie, colonne) à resélectionner après rechargement
+        QShortcut(QKeySequence("Ctrl+R"), self, self.copy_selection_right, context=Qt.WidgetWithChildrenShortcut)
+        self.tree.itemSelectionChanged.connect(self._selection_hint)
         self.start.currentIndexChanged.connect(self.reload)
         self.length.currentIndexChanged.connect(self.reload)
 
@@ -185,11 +197,17 @@ class ForecastPage(Page):
                     t.setForeground(c, GREEN if v >= 0 else RED)
         self.tree.setItemDelegateForColumn(n - 1, _ReadOnly(self.tree))
         self.tree.header().setSectionResizeMode(0, QHeaderView.Interactive)
-        self.tree.setColumnWidth(0, 260)
+        self.tree.setColumnWidth(0, 330)
         for c in range(1, n):
             self.tree.setColumnWidth(c, 96)
         self.tree.verticalScrollBar().setValue(scroll)
         self._filling = False
+        if self._restore:
+            cat, col = self._restore
+            it = self._find_item(cat)
+            if it is not None and col < self.tree.columnCount():
+                self.tree.setCurrentItem(it, col)
+        self._selection_hint()
 
     def _set_cell(self, item, col, cents, bold=False, computed=False, signed=False):
         item.setText(col, fmt_eur(cents, signed=signed) if cents is not None else "")
@@ -220,6 +238,7 @@ class ForecastPage(Page):
         cents = abs(cents) if cents is not None else None
         targets = self.months[col - 1:] if self.autocopy.isChecked() else [self.months[col - 1]]
         self.db.set_forecasts([(cat, m, cents) for m in targets])
+        self._restore = (cat, col)
         # rechargement différé : l'élément modifié ne doit pas être détruit pendant son propre signal
         QTimer.singleShot(0, self._after_edit)
 
@@ -237,21 +256,111 @@ class ForecastPage(Page):
         menu = QMenu(self)
         if 1 <= col <= len(self.months):
             m = self.months[col - 1]
-            value = self.fc.get(cat, {}).get(m)
+            value, _computed = self._value_at(cat, m)
             act = menu.addAction(T.icon("compare"), f"Recopier {fmt_eur(value) if value else 'cette valeur'} "
-                                                    f"sur les mois suivants",
+                                                    f"sur les mois suivants (Ctrl+R)",
                                  lambda: self._copy_right(cat, col))
-            act.setEnabled(value is not None)
+            act.setEnabled(value is not None and col < len(self.months))
             menu.addAction(T.icon("edit"), "Modifier…", lambda: self.tree.editItem(item, col))
             menu.addAction(T.icon("x"), f"Effacer {an.month_label(m)}", lambda: self._set(cat, [m], None))
         menu.addAction(T.icon("trash", T.RED), f"Effacer toute la ligne « {name} »",
                        lambda: self._set(cat, self.months, None))
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
+    def _find_item(self, cat):
+        def walk(item):
+            if item.data(0, CAT_ROLE) == cat:
+                return item
+            for i in range(item.childCount()):
+                found = walk(item.child(i))
+                if found is not None:
+                    return found
+            return None
+        for i in range(self.tree.topLevelItemCount()):
+            found = walk(self.tree.topLevelItem(i))
+            if found is not None:
+                return found
+        return None
+
+    def _value_at(self, cat, month):
+        """Valeur affichée d'une cellule : montant propre, sinon somme des sous-catégories."""
+        own = self.fc.get(cat, {}).get(month)
+        if own is not None:
+            return own, False
+        kids = [c.id for c in self.db.categories().values() if c.parent_id == cat]
+        total = sum(self.fc.get(k, {}).get(month, 0) for k in kids)
+        return (total, True) if total else (None, False)
+
+    def _selected_cells(self):
+        cells = []
+        for idx in self.tree.selectedIndexes():
+            item = self.tree.itemFromIndex(idx)
+            col = idx.column()
+            if item is not None and item.data(0, CAT_ROLE) is not None and 1 <= col <= len(self.months):
+                cells.append((item.data(0, CAT_ROLE), col))
+        if not cells:
+            item, col = self.tree.currentItem(), self.tree.currentColumn()
+            if item is not None and item.data(0, CAT_ROLE) is not None and 1 <= col <= len(self.months):
+                cells.append((item.data(0, CAT_ROLE), col))
+        return sorted(set(cells))
+
+    def _selection_hint(self):
+        cells = self._selected_cells()
+        if not cells:
+            self.copy_btn.setEnabled(False)
+            self.sel_hint.setText("Cliquez sur une cellule (n'importe quel mois), puis « Recopier vers la droite » ou "
+                                  "Ctrl+R. Vous pourrez ensuite modifier un mois suivant et recopier à nouveau à "
+                                  "partir de lui en cas d'évolution.")
+            return
+        self.copy_btn.setEnabled(any(c < len(self.months) for _, c in cells))
+        if len(cells) == 1:
+            cat, col = cells[0]
+            m = self.months[col - 1]
+            v, computed = self._value_at(cat, m)
+            what = fmt_eur(v) if v is not None else "case vide"
+            extra = " (somme des sous-catégories : chacune sera recopiée)" if computed else ""
+            if col < len(self.months):
+                target = (f"recopier sur <b>{an.month_label(self.months[col])} → "
+                          f"{an.month_label(self.months[-1])}</b>")
+            else:
+                target = "dernier mois affiché, rien à recopier"
+            self.sel_hint.setText(f"Sélection : <b>{self.db.category_label(cat)}</b>, {an.month_label(m, full=True)} "
+                                  f"= <b>{what}</b>{extra} — Ctrl+R pour {target}.")
+        else:
+            self.sel_hint.setText(f"{len(cells)} cellules sélectionnées — Ctrl+R pour recopier chacune sur les mois "
+                                  f"suivants.")
+
+    def copy_selection_right(self):
+        self.copy_right_cells(self._selected_cells())
+
+    def copy_right_cells(self, cells):
+        """Recopie chaque cellule (catégorie, colonne) sur tous les mois suivants du tableau."""
+        entries = []
+        for cat, col in cells:
+            m = self.months[col - 1]
+            following = self.months[col:]
+            if not following:
+                continue
+            own = self.fc.get(cat, {}).get(m)
+            if own is not None:
+                entries += [(cat, f, own) for f in following]
+            else:
+                for c in self.db.categories().values():
+                    if c.parent_id == cat:
+                        v = self.fc.get(c.id, {}).get(m)
+                        if v is not None:
+                            entries += [(c.id, f, v) for f in following]
+        if not entries:
+            info(self, "Rien à recopier : sélectionnez une cellule contenant un montant (avant le dernier mois).")
+            return
+        if cells:
+            self._restore = cells[0]
+        self.db.set_forecasts(entries)
+        self.reload()
+        self.changed.emit()
+
     def _copy_right(self, cat, col):
-        value = self.fc.get(cat, {}).get(self.months[col - 1])
-        if value is not None:
-            self._set(cat, self.months[col:], value)
+        self.copy_right_cells([(cat, col)])
 
     def _set(self, cat, months, cents):
         self.db.set_forecasts([(cat, m, cents) for m in months])

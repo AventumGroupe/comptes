@@ -136,6 +136,24 @@ def run(tmp_path):
     fp._copy_right(sup, 5)                     # recopie de mai vers la droite
     assert db.forecasts("2026-06", "2026-12")[sup]["2026-12"] == 30000
 
+    # Recopie depuis n'importe quel mois via la sélection (Ctrl+R), puis évolution en cours d'année
+    find(fp.tree, sup).setText(8, "320")       # août : nouvelle valeur (sans recopie automatique)
+    app.processEvents()
+    fp.tree.setCurrentItem(find(fp.tree, sup), 8)
+    assert fp._selected_cells() == [(sup, 8)] and fp.copy_btn.isEnabled()
+    fp.copy_selection_right()
+    fc = db.forecasts("2026-01", "2026-12")[sup]
+    assert fc["2026-07"] == 30000 and fc["2026-08"] == 32000 and fc["2026-12"] == 32000
+    assert fp.tree.currentColumn() == 8        # la sélection est conservée après rechargement
+
+    # Catégorie qui totalise ses sous-catégories : chaque sous-catégorie est recopiée
+    resto, resto_top = cat("Restaurant"), cat("Restaurants")
+    db.set_forecast(resto, "2026-04", 9000)
+    fp.reload()
+    fp.copy_right_cells([(resto_top, 4)])
+    fcr = db.forecasts("2026-01", "2026-12")
+    assert fcr[resto]["2026-12"] == 9000 and resto_top not in fcr
+
     # Prévu / réalisé
     pp = win.plan_tab
     win.show_page(7)
